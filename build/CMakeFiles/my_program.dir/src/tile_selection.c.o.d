@@ -41,9 +41,9 @@ CMakeFiles/my_program.dir/src/tile_selection.c.o: \
  /usr/include/x86_64-linux-gnu/bits/struct_rwlock.h /usr/include/alloca.h \
  /usr/include/x86_64-linux-gnu/bits/stdlib-float.h \
  /home/fil/Hoang/comp_easy/include/proto_comp/define.h \
- /home/fil/dependencies/prefix/curl/include/curl/curl.h \
- /home/fil/dependencies/prefix/curl/include/curl/curlver.h \
- /home/fil/dependencies/prefix/curl/include/curl/system.h \
+ /home/fil/Hoang/comp_easy/dependency/prefix/include/curl/curl.h \
+ /home/fil/Hoang/comp_easy/dependency/prefix/include/curl/curlver.h \
+ /home/fil/Hoang/comp_easy/dependency/prefix/include/curl/system.h \
  /usr/include/x86_64-linux-gnu/sys/socket.h \
  /usr/include/x86_64-linux-gnu/bits/types/struct_iovec.h \
  /usr/include/x86_64-linux-gnu/bits/socket.h \
@@ -82,15 +82,15 @@ CMakeFiles/my_program.dir/src/tile_selection.c.o: \
  /usr/include/x86_64-linux-gnu/bits/types/locale_t.h \
  /usr/include/x86_64-linux-gnu/bits/types/__locale_t.h \
  /usr/include/x86_64-linux-gnu/sys/time.h \
- /home/fil/dependencies/prefix/curl/include/curl/easy.h \
- /home/fil/dependencies/prefix/curl/include/curl/multi.h \
- /home/fil/dependencies/prefix/curl/include/curl/curl.h \
- /home/fil/dependencies/prefix/curl/include/curl/urlapi.h \
- /home/fil/dependencies/prefix/curl/include/curl/options.h \
- /home/fil/dependencies/prefix/curl/include/curl/header.h \
- /home/fil/dependencies/prefix/curl/include/curl/websockets.h \
- /home/fil/dependencies/prefix/curl/include/curl/mprintf.h \
- /home/fil/dependencies/prefix/curl/include/curl/typecheck-gcc.h \
+ /home/fil/Hoang/comp_easy/dependency/prefix/include/curl/easy.h \
+ /home/fil/Hoang/comp_easy/dependency/prefix/include/curl/multi.h \
+ /home/fil/Hoang/comp_easy/dependency/prefix/include/curl/curl.h \
+ /home/fil/Hoang/comp_easy/dependency/prefix/include/curl/urlapi.h \
+ /home/fil/Hoang/comp_easy/dependency/prefix/include/curl/options.h \
+ /home/fil/Hoang/comp_easy/dependency/prefix/include/curl/header.h \
+ /home/fil/Hoang/comp_easy/dependency/prefix/include/curl/websockets.h \
+ /home/fil/Hoang/comp_easy/dependency/prefix/include/curl/mprintf.h \
+ /home/fil/Hoang/comp_easy/dependency/prefix/include/curl/typecheck-gcc.h \
  /usr/lib/gcc/x86_64-linux-gnu/11/include/stdbool.h /usr/include/math.h \
  /usr/include/x86_64-linux-gnu/bits/math-vector.h \
  /usr/include/x86_64-linux-gnu/bits/libm-simd-decl-stubs.h \

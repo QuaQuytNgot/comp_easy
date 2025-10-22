@@ -4,7 +4,7 @@
 # compile C with /usr/bin/cc
 C_DEFINES = 
 
-C_INCLUDES = -I/home/fil/Hoang/comp_easy/include -I/home/fil/dependencies/prefix/curl/include
+C_INCLUDES = -I/home/fil/Hoang/comp_easy/include -I/home/fil/Hoang/comp_easy/dependency/prefix/include
 
 C_FLAGS = 
 

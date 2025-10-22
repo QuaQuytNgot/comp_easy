@@ -204,7 +204,7 @@ my_program: CMakeFiles/my_program.dir/src/tile_selection.c.o
 my_program: CMakeFiles/my_program.dir/src/viewport_prediction.c.o
 my_program: CMakeFiles/my_program.dir/real_example.c.o
 my_program: CMakeFiles/my_program.dir/build.make
-my_program: /home/fil/dependencies/prefix/curl/lib/libcurl.so
+my_program: ../dependency/prefix/lib/libcurl.so
 my_program: CMakeFiles/my_program.dir/link.txt
 	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --bold --progress-dir=/home/fil/Hoang/comp_easy/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_9) "Linking C executable my_program"
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/my_program.dir/link.txt --verbose=$(VERBOSE)

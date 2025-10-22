@@ -2,9 +2,9 @@ CMakeFiles/my_program.dir/real_example.c.o: \
  /home/fil/Hoang/comp_easy/real_example.c /usr/include/stdc-predef.h \
  /home/fil/Hoang/comp_easy/include/proto_comp/buffer.h \
  /home/fil/Hoang/comp_easy/include/proto_comp/define.h \
- /home/fil/dependencies/prefix/curl/include/curl/curl.h \
- /home/fil/dependencies/prefix/curl/include/curl/curlver.h \
- /home/fil/dependencies/prefix/curl/include/curl/system.h \
+ /home/fil/Hoang/comp_easy/dependency/prefix/include/curl/curl.h \
+ /home/fil/Hoang/comp_easy/dependency/prefix/include/curl/curlver.h \
+ /home/fil/Hoang/comp_easy/dependency/prefix/include/curl/system.h \
  /usr/include/x86_64-linux-gnu/sys/types.h /usr/include/features.h \
  /usr/include/features-time64.h \
  /usr/include/x86_64-linux-gnu/bits/wordsize.h \
@@ -80,15 +80,15 @@ CMakeFiles/my_program.dir/real_example.c.o: \
  /usr/include/x86_64-linux-gnu/bits/types/locale_t.h \
  /usr/include/x86_64-linux-gnu/bits/types/__locale_t.h \
  /usr/include/x86_64-linux-gnu/sys/time.h \
- /home/fil/dependencies/prefix/curl/include/curl/easy.h \
- /home/fil/dependencies/prefix/curl/include/curl/multi.h \
- /home/fil/dependencies/prefix/curl/include/curl/curl.h \
- /home/fil/dependencies/prefix/curl/include/curl/urlapi.h \
- /home/fil/dependencies/prefix/curl/include/curl/options.h \
- /home/fil/dependencies/prefix/curl/include/curl/header.h \
- /home/fil/dependencies/prefix/curl/include/curl/websockets.h \
- /home/fil/dependencies/prefix/curl/include/curl/mprintf.h \
- /home/fil/dependencies/prefix/curl/include/curl/typecheck-gcc.h \
+ /home/fil/Hoang/comp_easy/dependency/prefix/include/curl/easy.h \
+ /home/fil/Hoang/comp_easy/dependency/prefix/include/curl/multi.h \
+ /home/fil/Hoang/comp_easy/dependency/prefix/include/curl/curl.h \
+ /home/fil/Hoang/comp_easy/dependency/prefix/include/curl/urlapi.h \
+ /home/fil/Hoang/comp_easy/dependency/prefix/include/curl/options.h \
+ /home/fil/Hoang/comp_easy/dependency/prefix/include/curl/header.h \
+ /home/fil/Hoang/comp_easy/dependency/prefix/include/curl/websockets.h \
+ /home/fil/Hoang/comp_easy/dependency/prefix/include/curl/mprintf.h \
+ /home/fil/Hoang/comp_easy/dependency/prefix/include/curl/typecheck-gcc.h \
  /usr/lib/gcc/x86_64-linux-gnu/11/include/stdbool.h /usr/include/stdlib.h \
  /usr/include/x86_64-linux-gnu/bits/waitflags.h \
  /usr/include/x86_64-linux-gnu/bits/waitstatus.h /usr/include/alloca.h \

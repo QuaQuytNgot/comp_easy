@@ -5,9 +5,9 @@ CMakeFiles/my_program.dir/real_example.c.o: ../real_example.c \
   /usr/include/stdc-predef.h \
   ../include/proto_comp/buffer.h \
   ../include/proto_comp/define.h \
-  /home/fil/dependencies/prefix/curl/include/curl/curl.h \
-  /home/fil/dependencies/prefix/curl/include/curl/curlver.h \
-  /home/fil/dependencies/prefix/curl/include/curl/system.h \
+  ../dependency/prefix/include/curl/curl.h \
+  ../dependency/prefix/include/curl/curlver.h \
+  ../dependency/prefix/include/curl/system.h \
   /usr/include/x86_64-linux-gnu/sys/types.h \
   /usr/include/features.h \
   /usr/include/features-time64.h \
@@ -88,15 +88,15 @@ CMakeFiles/my_program.dir/real_example.c.o: ../real_example.c \
   /usr/include/x86_64-linux-gnu/bits/types/locale_t.h \
   /usr/include/x86_64-linux-gnu/bits/types/__locale_t.h \
   /usr/include/x86_64-linux-gnu/sys/time.h \
-  /home/fil/dependencies/prefix/curl/include/curl/easy.h \
-  /home/fil/dependencies/prefix/curl/include/curl/multi.h \
-  /home/fil/dependencies/prefix/curl/include/curl/curl.h \
-  /home/fil/dependencies/prefix/curl/include/curl/urlapi.h \
-  /home/fil/dependencies/prefix/curl/include/curl/options.h \
-  /home/fil/dependencies/prefix/curl/include/curl/header.h \
-  /home/fil/dependencies/prefix/curl/include/curl/websockets.h \
-  /home/fil/dependencies/prefix/curl/include/curl/mprintf.h \
-  /home/fil/dependencies/prefix/curl/include/curl/typecheck-gcc.h \
+  ../dependency/prefix/include/curl/easy.h \
+  ../dependency/prefix/include/curl/multi.h \
+  ../dependency/prefix/include/curl/curl.h \
+  ../dependency/prefix/include/curl/urlapi.h \
+  ../dependency/prefix/include/curl/options.h \
+  ../dependency/prefix/include/curl/header.h \
+  ../dependency/prefix/include/curl/websockets.h \
+  ../dependency/prefix/include/curl/mprintf.h \
+  ../dependency/prefix/include/curl/typecheck-gcc.h \
   /usr/lib/gcc/x86_64-linux-gnu/11/include/stdbool.h \
   /usr/include/stdlib.h \
   /usr/include/x86_64-linux-gnu/bits/waitflags.h \
@@ -130,9 +130,9 @@ CMakeFiles/my_program.dir/src/abr.c.o: ../src/abr.c \
   /usr/include/stdc-predef.h \
   ../include/proto_comp/abr.h \
   ../include/proto_comp/define.h \
-  /home/fil/dependencies/prefix/curl/include/curl/curl.h \
-  /home/fil/dependencies/prefix/curl/include/curl/curlver.h \
-  /home/fil/dependencies/prefix/curl/include/curl/system.h \
+  ../dependency/prefix/include/curl/curl.h \
+  ../dependency/prefix/include/curl/curlver.h \
+  ../dependency/prefix/include/curl/system.h \
   /usr/include/x86_64-linux-gnu/sys/types.h \
   /usr/include/features.h \
   /usr/include/features-time64.h \
@@ -213,15 +213,15 @@ CMakeFiles/my_program.dir/src/abr.c.o: ../src/abr.c \
   /usr/include/x86_64-linux-gnu/bits/types/locale_t.h \
   /usr/include/x86_64-linux-gnu/bits/types/__locale_t.h \
   /usr/include/x86_64-linux-gnu/sys/time.h \
-  /home/fil/dependencies/prefix/curl/include/curl/easy.h \
-  /home/fil/dependencies/prefix/curl/include/curl/multi.h \
-  /home/fil/dependencies/prefix/curl/include/curl/curl.h \
-  /home/fil/dependencies/prefix/curl/include/curl/urlapi.h \
-  /home/fil/dependencies/prefix/curl/include/curl/options.h \
-  /home/fil/dependencies/prefix/curl/include/curl/header.h \
-  /home/fil/dependencies/prefix/curl/include/curl/websockets.h \
-  /home/fil/dependencies/prefix/curl/include/curl/mprintf.h \
-  /home/fil/dependencies/prefix/curl/include/curl/typecheck-gcc.h \
+  ../dependency/prefix/include/curl/easy.h \
+  ../dependency/prefix/include/curl/multi.h \
+  ../dependency/prefix/include/curl/curl.h \
+  ../dependency/prefix/include/curl/urlapi.h \
+  ../dependency/prefix/include/curl/options.h \
+  ../dependency/prefix/include/curl/header.h \
+  ../dependency/prefix/include/curl/websockets.h \
+  ../dependency/prefix/include/curl/mprintf.h \
+  ../dependency/prefix/include/curl/typecheck-gcc.h \
   /usr/lib/gcc/x86_64-linux-gnu/11/include/stdbool.h \
   /usr/include/stdlib.h \
   /usr/include/x86_64-linux-gnu/bits/waitflags.h \
@@ -250,9 +250,9 @@ CMakeFiles/my_program.dir/src/buffer.c.o: ../src/buffer.c \
   /usr/include/stdc-predef.h \
   ../include/proto_comp/buffer.h \
   ../include/proto_comp/define.h \
-  /home/fil/dependencies/prefix/curl/include/curl/curl.h \
-  /home/fil/dependencies/prefix/curl/include/curl/curlver.h \
-  /home/fil/dependencies/prefix/curl/include/curl/system.h \
+  ../dependency/prefix/include/curl/curl.h \
+  ../dependency/prefix/include/curl/curlver.h \
+  ../dependency/prefix/include/curl/system.h \
   /usr/include/x86_64-linux-gnu/sys/types.h \
   /usr/include/features.h \
   /usr/include/features-time64.h \
@@ -333,15 +333,15 @@ CMakeFiles/my_program.dir/src/buffer.c.o: ../src/buffer.c \
   /usr/include/x86_64-linux-gnu/bits/types/locale_t.h \
   /usr/include/x86_64-linux-gnu/bits/types/__locale_t.h \
   /usr/include/x86_64-linux-gnu/sys/time.h \
-  /home/fil/dependencies/prefix/curl/include/curl/easy.h \
-  /home/fil/dependencies/prefix/curl/include/curl/multi.h \
-  /home/fil/dependencies/prefix/curl/include/curl/curl.h \
-  /home/fil/dependencies/prefix/curl/include/curl/urlapi.h \
-  /home/fil/dependencies/prefix/curl/include/curl/options.h \
-  /home/fil/dependencies/prefix/curl/include/curl/header.h \
-  /home/fil/dependencies/prefix/curl/include/curl/websockets.h \
-  /home/fil/dependencies/prefix/curl/include/curl/mprintf.h \
-  /home/fil/dependencies/prefix/curl/include/curl/typecheck-gcc.h \
+  ../dependency/prefix/include/curl/easy.h \
+  ../dependency/prefix/include/curl/multi.h \
+  ../dependency/prefix/include/curl/curl.h \
+  ../dependency/prefix/include/curl/urlapi.h \
+  ../dependency/prefix/include/curl/options.h \
+  ../dependency/prefix/include/curl/header.h \
+  ../dependency/prefix/include/curl/websockets.h \
+  ../dependency/prefix/include/curl/mprintf.h \
+  ../dependency/prefix/include/curl/typecheck-gcc.h \
   /usr/lib/gcc/x86_64-linux-gnu/11/include/stdbool.h \
   /usr/include/stdlib.h \
   /usr/include/x86_64-linux-gnu/bits/waitflags.h \
@@ -366,9 +366,9 @@ CMakeFiles/my_program.dir/src/bw_estimator.c.o: ../src/bw_estimator.c \
   /usr/include/stdc-predef.h \
   ../include/proto_comp/bw_estimator.h \
   ../include/proto_comp/define.h \
-  /home/fil/dependencies/prefix/curl/include/curl/curl.h \
-  /home/fil/dependencies/prefix/curl/include/curl/curlver.h \
-  /home/fil/dependencies/prefix/curl/include/curl/system.h \
+  ../dependency/prefix/include/curl/curl.h \
+  ../dependency/prefix/include/curl/curlver.h \
+  ../dependency/prefix/include/curl/system.h \
   /usr/include/x86_64-linux-gnu/sys/types.h \
   /usr/include/features.h \
   /usr/include/features-time64.h \
@@ -449,15 +449,15 @@ CMakeFiles/my_program.dir/src/bw_estimator.c.o: ../src/bw_estimator.c \
   /usr/include/x86_64-linux-gnu/bits/types/locale_t.h \
   /usr/include/x86_64-linux-gnu/bits/types/__locale_t.h \
   /usr/include/x86_64-linux-gnu/sys/time.h \
-  /home/fil/dependencies/prefix/curl/include/curl/easy.h \
-  /home/fil/dependencies/prefix/curl/include/curl/multi.h \
-  /home/fil/dependencies/prefix/curl/include/curl/curl.h \
-  /home/fil/dependencies/prefix/curl/include/curl/urlapi.h \
-  /home/fil/dependencies/prefix/curl/include/curl/options.h \
-  /home/fil/dependencies/prefix/curl/include/curl/header.h \
-  /home/fil/dependencies/prefix/curl/include/curl/websockets.h \
-  /home/fil/dependencies/prefix/curl/include/curl/mprintf.h \
-  /home/fil/dependencies/prefix/curl/include/curl/typecheck-gcc.h \
+  ../dependency/prefix/include/curl/easy.h \
+  ../dependency/prefix/include/curl/multi.h \
+  ../dependency/prefix/include/curl/curl.h \
+  ../dependency/prefix/include/curl/urlapi.h \
+  ../dependency/prefix/include/curl/options.h \
+  ../dependency/prefix/include/curl/header.h \
+  ../dependency/prefix/include/curl/websockets.h \
+  ../dependency/prefix/include/curl/mprintf.h \
+  ../dependency/prefix/include/curl/typecheck-gcc.h \
   /usr/lib/gcc/x86_64-linux-gnu/11/include/stdbool.h \
   /usr/include/stdlib.h \
   /usr/include/x86_64-linux-gnu/bits/waitflags.h \
@@ -484,9 +484,9 @@ CMakeFiles/my_program.dir/src/http.c.o: ../src/http.c \
   /usr/include/stdc-predef.h \
   ../include/proto_comp/buffer.h \
   ../include/proto_comp/define.h \
-  /home/fil/dependencies/prefix/curl/include/curl/curl.h \
-  /home/fil/dependencies/prefix/curl/include/curl/curlver.h \
-  /home/fil/dependencies/prefix/curl/include/curl/system.h \
+  ../dependency/prefix/include/curl/curl.h \
+  ../dependency/prefix/include/curl/curlver.h \
+  ../dependency/prefix/include/curl/system.h \
   /usr/include/x86_64-linux-gnu/sys/types.h \
   /usr/include/features.h \
   /usr/include/features-time64.h \
@@ -567,15 +567,15 @@ CMakeFiles/my_program.dir/src/http.c.o: ../src/http.c \
   /usr/include/x86_64-linux-gnu/bits/types/locale_t.h \
   /usr/include/x86_64-linux-gnu/bits/types/__locale_t.h \
   /usr/include/x86_64-linux-gnu/sys/time.h \
-  /home/fil/dependencies/prefix/curl/include/curl/easy.h \
-  /home/fil/dependencies/prefix/curl/include/curl/multi.h \
-  /home/fil/dependencies/prefix/curl/include/curl/curl.h \
-  /home/fil/dependencies/prefix/curl/include/curl/urlapi.h \
-  /home/fil/dependencies/prefix/curl/include/curl/options.h \
-  /home/fil/dependencies/prefix/curl/include/curl/header.h \
-  /home/fil/dependencies/prefix/curl/include/curl/websockets.h \
-  /home/fil/dependencies/prefix/curl/include/curl/mprintf.h \
-  /home/fil/dependencies/prefix/curl/include/curl/typecheck-gcc.h \
+  ../dependency/prefix/include/curl/easy.h \
+  ../dependency/prefix/include/curl/multi.h \
+  ../dependency/prefix/include/curl/curl.h \
+  ../dependency/prefix/include/curl/urlapi.h \
+  ../dependency/prefix/include/curl/options.h \
+  ../dependency/prefix/include/curl/header.h \
+  ../dependency/prefix/include/curl/websockets.h \
+  ../dependency/prefix/include/curl/mprintf.h \
+  ../dependency/prefix/include/curl/typecheck-gcc.h \
   /usr/lib/gcc/x86_64-linux-gnu/11/include/stdbool.h \
   /usr/include/stdlib.h \
   /usr/include/x86_64-linux-gnu/bits/waitflags.h \
@@ -604,9 +604,9 @@ CMakeFiles/my_program.dir/src/request_handler.c.o: ../src/request_handler.c \
   /usr/include/stdc-predef.h \
   ../include/proto_comp/http.h \
   ../include/proto_comp/define.h \
-  /home/fil/dependencies/prefix/curl/include/curl/curl.h \
-  /home/fil/dependencies/prefix/curl/include/curl/curlver.h \
-  /home/fil/dependencies/prefix/curl/include/curl/system.h \
+  ../dependency/prefix/include/curl/curl.h \
+  ../dependency/prefix/include/curl/curlver.h \
+  ../dependency/prefix/include/curl/system.h \
   /usr/include/x86_64-linux-gnu/sys/types.h \
   /usr/include/features.h \
   /usr/include/features-time64.h \
@@ -687,15 +687,15 @@ CMakeFiles/my_program.dir/src/request_handler.c.o: ../src/request_handler.c \
   /usr/include/x86_64-linux-gnu/bits/types/locale_t.h \
   /usr/include/x86_64-linux-gnu/bits/types/__locale_t.h \
   /usr/include/x86_64-linux-gnu/sys/time.h \
-  /home/fil/dependencies/prefix/curl/include/curl/easy.h \
-  /home/fil/dependencies/prefix/curl/include/curl/multi.h \
-  /home/fil/dependencies/prefix/curl/include/curl/curl.h \
-  /home/fil/dependencies/prefix/curl/include/curl/urlapi.h \
-  /home/fil/dependencies/prefix/curl/include/curl/options.h \
-  /home/fil/dependencies/prefix/curl/include/curl/header.h \
-  /home/fil/dependencies/prefix/curl/include/curl/websockets.h \
-  /home/fil/dependencies/prefix/curl/include/curl/mprintf.h \
-  /home/fil/dependencies/prefix/curl/include/curl/typecheck-gcc.h \
+  ../dependency/prefix/include/curl/easy.h \
+  ../dependency/prefix/include/curl/multi.h \
+  ../dependency/prefix/include/curl/curl.h \
+  ../dependency/prefix/include/curl/urlapi.h \
+  ../dependency/prefix/include/curl/options.h \
+  ../dependency/prefix/include/curl/header.h \
+  ../dependency/prefix/include/curl/websockets.h \
+  ../dependency/prefix/include/curl/mprintf.h \
+  ../dependency/prefix/include/curl/typecheck-gcc.h \
   /usr/lib/gcc/x86_64-linux-gnu/11/include/stdbool.h \
   /usr/include/stdlib.h \
   /usr/include/x86_64-linux-gnu/bits/waitflags.h \
@@ -765,9 +765,9 @@ CMakeFiles/my_program.dir/src/tile_selection.c.o: ../src/tile_selection.c \
   /usr/include/alloca.h \
   /usr/include/x86_64-linux-gnu/bits/stdlib-float.h \
   ../include/proto_comp/define.h \
-  /home/fil/dependencies/prefix/curl/include/curl/curl.h \
-  /home/fil/dependencies/prefix/curl/include/curl/curlver.h \
-  /home/fil/dependencies/prefix/curl/include/curl/system.h \
+  ../dependency/prefix/include/curl/curl.h \
+  ../dependency/prefix/include/curl/curlver.h \
+  ../dependency/prefix/include/curl/system.h \
   /usr/include/x86_64-linux-gnu/sys/socket.h \
   /usr/include/x86_64-linux-gnu/bits/types/struct_iovec.h \
   /usr/include/x86_64-linux-gnu/bits/socket.h \
@@ -810,15 +810,15 @@ CMakeFiles/my_program.dir/src/tile_selection.c.o: ../src/tile_selection.c \
   /usr/include/x86_64-linux-gnu/bits/types/locale_t.h \
   /usr/include/x86_64-linux-gnu/bits/types/__locale_t.h \
   /usr/include/x86_64-linux-gnu/sys/time.h \
-  /home/fil/dependencies/prefix/curl/include/curl/easy.h \
-  /home/fil/dependencies/prefix/curl/include/curl/multi.h \
-  /home/fil/dependencies/prefix/curl/include/curl/curl.h \
-  /home/fil/dependencies/prefix/curl/include/curl/urlapi.h \
-  /home/fil/dependencies/prefix/curl/include/curl/options.h \
-  /home/fil/dependencies/prefix/curl/include/curl/header.h \
-  /home/fil/dependencies/prefix/curl/include/curl/websockets.h \
-  /home/fil/dependencies/prefix/curl/include/curl/mprintf.h \
-  /home/fil/dependencies/prefix/curl/include/curl/typecheck-gcc.h \
+  ../dependency/prefix/include/curl/easy.h \
+  ../dependency/prefix/include/curl/multi.h \
+  ../dependency/prefix/include/curl/curl.h \
+  ../dependency/prefix/include/curl/urlapi.h \
+  ../dependency/prefix/include/curl/options.h \
+  ../dependency/prefix/include/curl/header.h \
+  ../dependency/prefix/include/curl/websockets.h \
+  ../dependency/prefix/include/curl/mprintf.h \
+  ../dependency/prefix/include/curl/typecheck-gcc.h \
   /usr/lib/gcc/x86_64-linux-gnu/11/include/stdbool.h \
   /usr/include/math.h \
   /usr/include/x86_64-linux-gnu/bits/math-vector.h \
@@ -839,9 +839,9 @@ CMakeFiles/my_program.dir/src/viewport_prediction.c.o: ../src/viewport_predictio
   /usr/include/stdc-predef.h \
   ../include/proto_comp/viewport_prediction.h \
   ../include/proto_comp/define.h \
-  /home/fil/dependencies/prefix/curl/include/curl/curl.h \
-  /home/fil/dependencies/prefix/curl/include/curl/curlver.h \
-  /home/fil/dependencies/prefix/curl/include/curl/system.h \
+  ../dependency/prefix/include/curl/curl.h \
+  ../dependency/prefix/include/curl/curlver.h \
+  ../dependency/prefix/include/curl/system.h \
   /usr/include/x86_64-linux-gnu/sys/types.h \
   /usr/include/features.h \
   /usr/include/features-time64.h \
@@ -922,15 +922,15 @@ CMakeFiles/my_program.dir/src/viewport_prediction.c.o: ../src/viewport_predictio
   /usr/include/x86_64-linux-gnu/bits/types/locale_t.h \
   /usr/include/x86_64-linux-gnu/bits/types/__locale_t.h \
   /usr/include/x86_64-linux-gnu/sys/time.h \
-  /home/fil/dependencies/prefix/curl/include/curl/easy.h \
-  /home/fil/dependencies/prefix/curl/include/curl/multi.h \
-  /home/fil/dependencies/prefix/curl/include/curl/curl.h \
-  /home/fil/dependencies/prefix/curl/include/curl/urlapi.h \
-  /home/fil/dependencies/prefix/curl/include/curl/options.h \
-  /home/fil/dependencies/prefix/curl/include/curl/header.h \
-  /home/fil/dependencies/prefix/curl/include/curl/websockets.h \
-  /home/fil/dependencies/prefix/curl/include/curl/mprintf.h \
-  /home/fil/dependencies/prefix/curl/include/curl/typecheck-gcc.h \
+  ../dependency/prefix/include/curl/easy.h \
+  ../dependency/prefix/include/curl/multi.h \
+  ../dependency/prefix/include/curl/curl.h \
+  ../dependency/prefix/include/curl/urlapi.h \
+  ../dependency/prefix/include/curl/options.h \
+  ../dependency/prefix/include/curl/header.h \
+  ../dependency/prefix/include/curl/websockets.h \
+  ../dependency/prefix/include/curl/mprintf.h \
+  ../dependency/prefix/include/curl/typecheck-gcc.h \
   /usr/lib/gcc/x86_64-linux-gnu/11/include/stdbool.h \
   /usr/include/stdlib.h \
   /usr/include/x86_64-linux-gnu/bits/waitflags.h \
@@ -954,15 +954,7 @@ CMakeFiles/my_program.dir/src/viewport_prediction.c.o: ../src/viewport_predictio
 
 ../src/viewport_prediction.c:
 
-/usr/include/asm-generic/sockios.h:
-
 /usr/include/x86_64-linux-gnu/asm/sockios.h:
-
-/usr/include/x86_64-linux-gnu/bits/posix1_lim.h:
-
-/usr/include/asm-generic/bitsperlong.h:
-
-/home/fil/dependencies/prefix/curl/include/curl/urlapi.h:
 
 /usr/include/x86_64-linux-gnu/asm/posix_types_64.h:
 
@@ -973,8 +965,6 @@ CMakeFiles/my_program.dir/src/viewport_prediction.c.o: ../src/viewport_predictio
 /usr/include/x86_64-linux-gnu/bits/socket.h:
 
 /usr/include/x86_64-linux-gnu/bits/types/struct_iovec.h:
-
-/home/fil/dependencies/prefix/curl/include/curl/typecheck-gcc.h:
 
 /usr/include/x86_64-linux-gnu/bits/atomic_wide_counter.h:
 
@@ -994,8 +984,6 @@ CMakeFiles/my_program.dir/src/viewport_prediction.c.o: ../src/viewport_predictio
 
 /usr/include/x86_64-linux-gnu/bits/pthread_stack_min.h:
 
-/home/fil/dependencies/prefix/curl/include/curl/multi.h:
-
 /usr/include/x86_64-linux-gnu/bits/types/struct_osockaddr.h:
 
 /usr/include/x86_64-linux-gnu/bits/types/struct_timeval.h:
@@ -1005,8 +993,6 @@ CMakeFiles/my_program.dir/src/viewport_prediction.c.o: ../src/viewport_predictio
 /usr/include/x86_64-linux-gnu/bits/types/__sigset_t.h:
 
 /usr/include/x86_64-linux-gnu/bits/byteswap.h:
-
-/home/fil/dependencies/prefix/curl/include/curl/easy.h:
 
 /usr/include/x86_64-linux-gnu/bits/select.h:
 
@@ -1018,8 +1004,6 @@ CMakeFiles/my_program.dir/src/viewport_prediction.c.o: ../src/viewport_predictio
 
 /usr/include/features-time64.h:
 
-/home/fil/dependencies/prefix/curl/include/curl/header.h:
-
 /usr/include/x86_64-linux-gnu/bits/types/__fpos64_t.h:
 
 /usr/include/asm-generic/socket.h:
@@ -1028,9 +1012,25 @@ CMakeFiles/my_program.dir/src/viewport_prediction.c.o: ../src/viewport_predictio
 
 /usr/include/x86_64-linux-gnu/bits/wordsize.h:
 
-/home/fil/dependencies/prefix/curl/include/curl/curlver.h:
+/usr/include/x86_64-linux-gnu/bits/posix1_lim.h:
 
-../include/proto_comp/abr.h:
+/usr/include/asm-generic/bitsperlong.h:
+
+/usr/include/x86_64-linux-gnu/bits/types/__mbstate_t.h:
+
+../src/bw_estimator.c:
+
+/usr/include/features.h:
+
+/usr/include/x86_64-linux-gnu/bits/typesizes.h:
+
+../include/proto_comp/tile_selection.h:
+
+/usr/include/x86_64-linux-gnu/bits/fp-logb.h:
+
+/usr/include/x86_64-linux-gnu/gnu/stubs-64.h:
+
+../include/proto_comp/buffer.h:
 
 /usr/include/x86_64-linux-gnu/bits/types/clock_t.h:
 
@@ -1048,37 +1048,25 @@ CMakeFiles/my_program.dir/src/viewport_prediction.c.o: ../src/viewport_predictio
 
 /usr/include/endian.h:
 
-/home/fil/dependencies/prefix/curl/include/curl/curl.h:
+/usr/include/asm-generic/posix_types.h:
+
+/usr/include/stdc-predef.h:
+
+/usr/include/x86_64-linux-gnu/sys/socket.h:
+
+/usr/include/x86_64-linux-gnu/bits/uintn-identity.h:
+
+../dependency/prefix/include/curl/curl.h:
+
+/usr/include/x86_64-linux-gnu/bits/stdlib-float.h:
 
 /usr/include/x86_64-linux-gnu/bits/types/clockid_t.h:
 
 /usr/include/x86_64-linux-gnu/bits/libm-simd-decl-stubs.h:
 
-/usr/include/x86_64-linux-gnu/sys/socket.h:
-
-/usr/include/features.h:
-
-/usr/include/stdc-predef.h:
-
-/usr/include/asm-generic/posix_types.h:
-
-/usr/include/x86_64-linux-gnu/bits/typesizes.h:
-
-../include/proto_comp/tile_selection.h:
-
-/usr/include/x86_64-linux-gnu/bits/stdlib-float.h:
-
-/usr/include/x86_64-linux-gnu/bits/uintn-identity.h:
-
-/usr/include/x86_64-linux-gnu/bits/fp-logb.h:
-
-/usr/include/x86_64-linux-gnu/gnu/stubs-64.h:
-
-../include/proto_comp/buffer.h:
+/usr/include/x86_64-linux-gnu/sys/types.h:
 
 /usr/include/x86_64-linux-gnu/bits/socket_type.h:
-
-/home/fil/dependencies/prefix/curl/include/curl/websockets.h:
 
 /usr/include/x86_64-linux-gnu/bits/types.h:
 
@@ -1092,35 +1080,21 @@ CMakeFiles/my_program.dir/src/viewport_prediction.c.o: ../src/viewport_predictio
 
 /usr/include/x86_64-linux-gnu/bits/endianness.h:
 
-/usr/include/x86_64-linux-gnu/sys/types.h:
-
-/home/fil/dependencies/prefix/curl/include/curl/system.h:
-
-/usr/include/x86_64-linux-gnu/bits/libc-header-start.h:
-
-/home/fil/dependencies/prefix/curl/include/curl/options.h:
-
 /usr/include/stdio.h:
 
-/usr/include/x86_64-linux-gnu/bits/types/__locale_t.h:
-
-../include/proto_comp/request_handler.h:
-
-../src/tile_selection.c:
+/usr/include/x86_64-linux-gnu/bits/libc-header-start.h:
 
 /usr/lib/gcc/x86_64-linux-gnu/11/include/stdarg.h:
 
 /usr/include/x86_64-linux-gnu/bits/types/__fpos_t.h:
 
-/usr/include/x86_64-linux-gnu/bits/types/__mbstate_t.h:
-
-../src/bw_estimator.c:
-
-/usr/include/x86_64-linux-gnu/bits/stdio_lim.h:
+/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h:
 
 /usr/include/x86_64-linux-gnu/bits/types/FILE.h:
 
-/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h:
+/usr/include/x86_64-linux-gnu/bits/stdio_lim.h:
+
+../include/proto_comp/abr.h:
 
 /usr/include/x86_64-linux-gnu/bits/types/struct_itimerspec.h:
 
@@ -1134,11 +1108,15 @@ CMakeFiles/my_program.dir/src/viewport_prediction.c.o: ../src/viewport_predictio
 
 /usr/lib/gcc/x86_64-linux-gnu/11/include/limits.h:
 
+../dependency/prefix/include/curl/curlver.h:
+
 /usr/lib/gcc/x86_64-linux-gnu/11/include/syslimits.h:
 
 /usr/include/x86_64-linux-gnu/bits/wchar.h:
 
 /usr/include/x86_64-linux-gnu/bits/local_lim.h:
+
+../dependency/prefix/include/curl/typecheck-gcc.h:
 
 ../include/proto_comp/bw_estimator.h:
 
@@ -1154,7 +1132,41 @@ CMakeFiles/my_program.dir/src/viewport_prediction.c.o: ../src/viewport_predictio
 
 /usr/include/x86_64-linux-gnu/sys/time.h:
 
-/home/fil/dependencies/prefix/curl/include/curl/mprintf.h:
+/usr/include/asm-generic/sockios.h:
+
+../dependency/prefix/include/curl/easy.h:
+
+../src/abr.c:
+
+../dependency/prefix/include/curl/multi.h:
+
+/usr/include/x86_64-linux-gnu/bits/fp-fast.h:
+
+../dependency/prefix/include/curl/system.h:
+
+/usr/include/linux/limits.h:
+
+/usr/include/x86_64-linux-gnu/bits/posix2_lim.h:
+
+/usr/include/stdint.h:
+
+../dependency/prefix/include/curl/urlapi.h:
+
+../include/proto_comp/request_handler.h:
+
+../src/tile_selection.c:
+
+../dependency/prefix/include/curl/mprintf.h:
+
+../dependency/prefix/include/curl/options.h:
+
+/usr/include/x86_64-linux-gnu/bits/types/__locale_t.h:
+
+../dependency/prefix/include/curl/header.h:
+
+../dependency/prefix/include/curl/websockets.h:
+
+../include/proto_comp/viewport_prediction.h:
 
 /usr/lib/gcc/x86_64-linux-gnu/11/include/stdbool.h:
 
@@ -1176,29 +1188,17 @@ CMakeFiles/my_program.dir/src/viewport_prediction.c.o: ../src/viewport_predictio
 
 /usr/include/x86_64-linux-gnu/bits/math-vector.h:
 
-/usr/include/x86_64-linux-gnu/bits/fp-fast.h:
-
-/usr/include/linux/limits.h:
-
-/usr/include/x86_64-linux-gnu/bits/posix2_lim.h:
-
-/usr/include/stdint.h:
-
 /usr/include/x86_64-linux-gnu/bits/mathcalls-helper-functions.h:
 
 /usr/include/x86_64-linux-gnu/sys/select.h:
 
 /usr/include/x86_64-linux-gnu/bits/stdint-uintn.h:
 
-../include/proto_comp/viewport_prediction.h:
+/usr/lib/gcc/x86_64-linux-gnu/11/include/stddef.h:
 
 /usr/include/x86_64-linux-gnu/bits/struct_rwlock.h:
 
-/usr/lib/gcc/x86_64-linux-gnu/11/include/stddef.h:
-
 /usr/include/strings.h:
-
-../src/abr.c:
 
 /usr/include/x86_64-linux-gnu/bits/thread-shared-types.h:
 

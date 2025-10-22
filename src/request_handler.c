@@ -164,7 +164,7 @@ RET request_handler_post_get_info(request_handler_t *self,
     snprintf(
         url_buffer,
         sizeof(url_buffer),
-        "%s/beach_%lld/erp_8x6/tile_yuv/tile_%d_%d_480x360_QP%d.bin",
+        "%s/beach/beach_%lld/erp_8x6/tile_yuv/tile_%d_%d_480x360_QP%d.bin",
         self->ser_addr,
         chunk_id,
         tile_id / NO_OF_COLS,
@@ -180,7 +180,7 @@ RET request_handler_post_get_info(request_handler_t *self,
            qp);
 
     RET r = http_get_to_buffer(url_buffer,
-                               STREAM_HTTP_3_0,
+                               STREAM_HTTP_2_0,
                                &self->data[tile_id],
                                &self->dls[tile_id],
                                &self->cnnt[tile_id],
@@ -235,7 +235,7 @@ RET request_handler_post_get_info(request_handler_t *self,
     {
       snprintf(url_buffer,
                sizeof(url_buffer),
-               "%s/beach_%lld/erp_8x6/tile_yuv/"
+               "%s/beach/beach_%lld/erp_8x6/tile_yuv/"
                "tile_%d_%d_480x360_QP38.bin",
                self->ser_addr,
                chunk_id,
@@ -248,7 +248,7 @@ RET request_handler_post_get_info(request_handler_t *self,
              tile_id % NO_OF_COLS);
 
       RET r = http_get_to_buffer(url_buffer,
-                                 STREAM_HTTP_3_0,
+                                 STREAM_HTTP_2_0,
                                  &self->data[tile_id],
                                  &self->dls[tile_id],
                                  &self->cnnt[tile_id],
