@@ -17,7 +17,7 @@
 
 // Configuration
 #define TOTAL_SEGMENTS 10
-#define INITIAL_BUFFER_SIZE 2.0f
+#define INITIAL_BUFFER_SIZE 0.0f
 #define HISTORY_SIZE 100
 #define PREDICTION_WINDOW 3  // P = 3
 #define SERVER_ADDRESS "https://192.168.101.17:8443"
@@ -28,6 +28,8 @@ typedef struct {
     float pitch;
     int timestamp_ms;
 } ViewportSample;
+
+int bitrate_fixed[] = {4, 3, 3, 2, 3, 3, 4, 4, 3, 4, 4, 3, 4, 4};
 
 // Mock viewport dataset - Replace with your real data
 ViewportSample viewport_dataset[] = {
@@ -290,9 +292,9 @@ int main() {
 
     // Loop through each segment to be streamed
     // CHANGED: Reverted to 0-based loop to match server logs and file names
-    for (COUNT segment_id = 0; segment_id < TOTAL_SEGMENTS; segment_id++) {
+    for (COUNT segment_id = 0; segment_id <= TOTAL_SEGMENTS; segment_id++) {
         printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-        printf("  PROCESSING SEGMENT %llu / %d\n", segment_id, TOTAL_SEGMENTS - 1); // Print 0-9
+        printf("  PROCESSING SEGMENT %llu / %d\n", segment_id, TOTAL_SEGMENTS); // Print 0-9
         printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
         // CHANGED: Use segment_id directly for 0-based array indexing
@@ -403,18 +405,17 @@ int main() {
             abr_selector_init(&abr_selector, ABR_FOR_NORMAL_BUF); // Use normal ABR
         }
 
-        /*
         // ORIGINAL ABR LOGIC - Commented out for debugging
-        int chosen_quality = abr_selector.choose_bitrate(
-            (float)predicted_bw,
-            PREDICTION_WINDOW,
-            buffer_level,
-            last_quality
-        );
-        */
+        // int chosen_quality = abr_selector.choose_bitrate(
+        //     (float)predicted_bw,
+        //     PREDICTION_WINDOW,
+        //     buffer_level,
+        //     last_quality
+        // );
+        int chosen_quality = bitrate_fixed[segment_id];
 
-        // CHANGED: Force quality 4 (QP20) to match available files on server
-        int chosen_quality = 4;
+        // // CHANGED: Force quality 4 (QP20) to match available files on server
+        // int chosen_quality = 4;
         printf("  [DEBUG] Forcing quality 4 (QP20) to match server files.\n");
 
 

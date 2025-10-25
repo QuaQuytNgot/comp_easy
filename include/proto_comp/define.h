@@ -30,7 +30,7 @@ typedef enum
 #define BYTE              unsigned int
 #define BW_DEFAULT        (-1)
 #define HISTORY_SIZE      100
-#define PREDICTION_WINDOW 10
+#define PREDICTION_WINDOW 3
 
 #define MAX_BUFFER_SIZE   4.0f
 #define STEP              0.01f
@@ -75,12 +75,12 @@ typedef enum
 
 #define roll   0
 #define W      3840
-#define H      1920
+#define H      2160
 #define FOV_h  90
 #define FOV_v  90
 
 #define NO_OF_ROWS 6
-#define NO_OF_COLS 4
+#define NO_OF_COLS 8
 
 #ifndef min
 #define min(a, b) (((a) < (b)) ? (a) : (b))

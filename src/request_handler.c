@@ -144,7 +144,7 @@ RET request_handler_post_get_info(request_handler_t *self,
 
   char url_buffer[512];
 
-  printf("=== CHUNK %lld DOWNLOAD STARTED ===\n", chunk_id);
+  printf("=== CHUNK %lld DOWNLOAD STARTED ===\n", chunk_id + 1);
 
   for (int i = 0; i < num_vp_tiles; i++)
   {
@@ -166,7 +166,7 @@ RET request_handler_post_get_info(request_handler_t *self,
         sizeof(url_buffer),
         "%s/beach/beach_%lld/erp_8x6/tile_yuv/tile_%d_%d_480x360_QP%d.bin",
         self->ser_addr,
-        chunk_id,
+        chunk_id + 1,
         tile_id / NO_OF_COLS,
         tile_id % NO_OF_COLS,
         qp);
@@ -191,22 +191,22 @@ RET request_handler_post_get_info(request_handler_t *self,
 
     printf("  Buffer size    : %zu bytes\n",
            self->data[tile_id].size);
-    printf("  Download speed : %lld bps (%.2f Mbps)\n",
+    printf("  Download speed : %ld bps (%.2f Mbps)\n",
            self->dls[tile_id],
            self->dls[tile_id] / 1000000.0);
-    printf("  Connect time   : %lld us (%.3f ms)\n",
+    printf("  Connect time   : %ld us (%.3f ms)\n",
            self->cnnt[tile_id],
            self->cnnt[tile_id] / 1000.0);
-    printf("  Pre-transfer   : %lld us (%.3f ms)\n",
+    printf("  Pre-transfer   : %ld us (%.3f ms)\n",
            self->pre_trans_time[tile_id],
            self->pre_trans_time[tile_id] / 1000.0);
-    printf("  Start transfer : %lld us (%.3f ms)\n",
+    printf("  Start transfer : %ld us (%.3f ms)\n",
            self->start_trans_time[tile_id],
            self->start_trans_time[tile_id] / 1000.0);
     printf("  Total time     : %lld us (%.3f ms)\n",
            self->total_time[tile_id],
            self->total_time[tile_id] / 1000.0);
-    printf("  Size downloaded: %lld bytes\n",
+    printf("  Size downloaded: %ld bytes\n",
            self->size_dl[tile_id]);
     printf("  Status         : %s\n",
            (r == RET_SUCCESS) ? "SUCCESS" : "FAILED");
@@ -236,9 +236,9 @@ RET request_handler_post_get_info(request_handler_t *self,
       snprintf(url_buffer,
                sizeof(url_buffer),
                "%s/beach/beach_%lld/erp_8x6/tile_yuv/"
-               "tile_%d_%d_480x360_QP38.bin",
+               "tile_%lld_%lld_480x360_QP38.bin",
                self->ser_addr,
-               chunk_id,
+               chunk_id + 1,
                tile_id / NO_OF_COLS,
                tile_id % NO_OF_COLS);
 
