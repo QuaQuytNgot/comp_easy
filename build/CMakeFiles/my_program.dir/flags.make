@@ -6,5 +6,5 @@ C_DEFINES =
 
 C_INCLUDES = -I/home/fil/Hoang/comp_easy/include -I/home/fil/Hoang/comp_easy/dependency/prefix/include
 
-C_FLAGS = -g
+C_FLAGS = 
 

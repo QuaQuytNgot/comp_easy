@@ -42,6 +42,8 @@ typedef enum
 #define VIEWPORT_HEIGHT_DEGREES 90.0f
 #define TILE_WIDTH (360.0f / NO_OF_COLS)  // 90 degrees
 #define TILE_HEIGHT (180.0f / NO_OF_ROWS)  // 30 degrees
+#define MAX_PARALLEL_VP_TILES 8
+#define MAX_PARALLEL_NON_VP_TILES 4
 
 typedef enum
 {

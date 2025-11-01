@@ -248,7 +248,7 @@ RET request_handler_post_get_info(request_handler_t *self,
              tile_id % NO_OF_COLS);
 
       RET r = http_get_to_buffer(url_buffer,
-                                 STREAM_HTTP_2_0,
+                                 STREAM_HTTP_3_0,
                                  &self->data[tile_id],
                                  &self->dls[tile_id],
                                  &self->cnnt[tile_id],

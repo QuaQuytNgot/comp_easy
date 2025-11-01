@@ -2,3 +2,6 @@ dependency/
 dependencies/
 test.c
 build/
+build1/
+data_prev/
+real_example_v2.c
