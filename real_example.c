@@ -19,11 +19,12 @@
 #define TOTAL_SEGMENTS 10
 #define INITIAL_BUFFER_SIZE 0.0f
 #define HISTORY_SIZE 100
-#define PREDICTION_WINDOW 3  // P = 3
+#define PREDICTION_WINDOW 3 // P = 3
 #define SERVER_ADDRESS "https://192.168.101.17:8443"
 
 // Viewport dataset structure (you'll populate this with real data)
-typedef struct {
+typedef struct
+{
     float yaw;
     float pitch;
     int timestamp_ms;
@@ -65,7 +66,8 @@ ViewportSample viewport_dataset[] = {
     {5.0f, 2.0f, 1000},
     {10.0f, 3.0f, 2000},
     {15.0f, 5.0f, 3000},
-    {20.0f, 7.0f, 4000},{5.0f, 2.0f, 1000},
+    {20.0f, 7.0f, 4000},
+    {5.0f, 2.0f, 1000},
     {10.0f, 3.0f, 2000},
     {15.0f, 5.0f, 3000},
     {20.0f, 7.0f, 4000}
@@ -74,7 +76,8 @@ ViewportSample viewport_dataset[] = {
 #define DATASET_SIZE (sizeof(viewport_dataset) / sizeof(ViewportSample))
 
 // Global metrics structure
-typedef struct {
+typedef struct
+{
     COUNT segment_id;
     float predicted_yaw;
     float predicted_pitch;
@@ -88,7 +91,8 @@ typedef struct {
 } SegmentMetrics;
 
 // Function to print a header for the pipeline output
-void print_pipeline_header() {
+void print_pipeline_header()
+{
     printf("\n");
     printf("========================================\n");
     printf("   360 VIDEO STREAMING PIPELINE\n");
@@ -101,7 +105,8 @@ void print_pipeline_header() {
 }
 
 // Function to print metrics for a single segment
-void print_segment_metrics(SegmentMetrics *metrics) {
+void print_segment_metrics(SegmentMetrics *metrics)
+{
     printf("\n┌────────────────────────────────────────────────┐\n");
     printf("│ SEGMENT %llu METRICS                           \n", metrics->segment_id);
     printf("├────────────────────────────────────────────────┤\n");
@@ -132,7 +137,8 @@ void print_segment_metrics(SegmentMetrics *metrics) {
 }
 
 // Function to print a summary of the entire streaming session
-void print_summary(SegmentMetrics *all_metrics, int count) {
+void print_summary(SegmentMetrics *all_metrics, int count)
+{
     printf("\n");
     printf("╔════════════════════════════════════════════════╗\n");
     printf("║          STREAMING SESSION SUMMARY             ║\n");
@@ -142,7 +148,8 @@ void print_summary(SegmentMetrics *all_metrics, int count) {
     int quality_sum = 0;
 
     // Aggregate metrics from all segments
-    for (int i = 0; i < count; i++) {
+    for (int i = 0; i < count; i++)
+    {
         total_time += all_metrics[i].total_download_time_ms;
         total_data += all_metrics[i].total_bytes_downloaded;
         avg_bw += all_metrics[i].avg_download_speed_mbps;
@@ -158,7 +165,8 @@ void print_summary(SegmentMetrics *all_metrics, int count) {
     printf("╚════════════════════════════════════════════════╝\n\n");
 }
 
-int main() {
+int main()
+{
     RET ret; // Return status variable
 
     print_pipeline_header(); // Print initial header information
@@ -173,9 +181,10 @@ int main() {
     ret = request_handler_init(&request_handler,
                                SERVER_ADDRESS,
                                TOTAL_SEGMENTS,
-                               5,  // version_count (Corresponds to QP levels: 38, 32, 28, 24, 20)
+                               5,                        // version_count (Corresponds to QP levels: 38, 32, 28, 24, 20)
                                NO_OF_ROWS * NO_OF_COLS); // tile_count based on grid size
-    if (ret != RET_SUCCESS) {
+    if (ret != RET_SUCCESS)
+    {
         printf("[ERROR] Failed to initialize request handler\n");
         return 1; // Exit if initialization fails
     }
@@ -184,7 +193,8 @@ int main() {
     // 2. Initialize Bandwidth Estimator
     bw_estimator_t bw_estimator;
     ret = bw_estimator_init(&bw_estimator, BW_ESTIMATOR_HARMONIC); // Using harmonic mean estimator
-    if (ret != RET_SUCCESS) {
+    if (ret != RET_SUCCESS)
+    {
         printf("[ERROR] Failed to initialize bandwidth estimator\n");
         request_handler_destroy(&request_handler); // Clean up previously initialized components
         return 1;
@@ -193,7 +203,8 @@ int main() {
 
     // 3. Allocate Bandwidth History array
     bw_t *bw_history = (bw_t *)calloc(HISTORY_SIZE, sizeof(bw_t));
-    if (!bw_history) {
+    if (!bw_history)
+    {
         printf("[ERROR] Failed to allocate bandwidth history\n");
         request_handler_destroy(&request_handler);
         bw_estimator_destroy(&bw_estimator);
@@ -207,7 +218,8 @@ int main() {
     float *pitch_history = (float *)calloc(HISTORY_SIZE, sizeof(float));
     int *timestamps = (int *)calloc(HISTORY_SIZE, sizeof(int));
 
-    if (!yaw_history || !pitch_history || !timestamps) {
+    if (!yaw_history || !pitch_history || !timestamps)
+    {
         printf("[ERROR] Failed to allocate viewport history\n");
         // Clean up allocated memory
         free(bw_history);
@@ -224,8 +236,8 @@ int main() {
         .yaw_history = yaw_history,
         .pitch_history = pitch_history,
         .timestamps = timestamps,
-        .current_index = 0, // Start index for circular buffer
-        .sample_count = 0,  // Number of samples currently stored
+        .current_index = 0,  // Start index for circular buffer
+        .sample_count = 0,   // Number of samples currently stored
         .next_timestamp = 0, // Timestamp for the next sample
         .history_size = HISTORY_SIZE,
         .vpes_post = vpes_legr // Set prediction function (linear regression)
@@ -235,7 +247,8 @@ int main() {
     // 5. Initialize Tile Selector
     tile_selection_t tile_selector;
     ret = tile_selection_init(&tile_selector, FIXED_TILE_SELECTION); // Using fixed tile selection logic
-    if (ret != RET_SUCCESS) {
+    if (ret != RET_SUCCESS)
+    {
         printf("[ERROR] Failed to initialize tile selector\n");
         // Clean up allocated memory
         free(bw_history);
@@ -251,7 +264,8 @@ int main() {
     // 6. Initialize ABR (Adaptive Bitrate) Selector
     abr_selector_t abr_selector;
     ret = abr_selector_init(&abr_selector, ABR_FOR_NORMAL_BUF); // Start with normal buffer logic
-    if (ret != RET_SUCCESS) {
+    if (ret != RET_SUCCESS)
+    {
         printf("[ERROR] Failed to initialize ABR selector\n");
         // Clean up allocated memory
         free(bw_history);
@@ -266,7 +280,8 @@ int main() {
 
     // Allocate storage for metrics per segment
     SegmentMetrics *all_metrics = (SegmentMetrics *)calloc(TOTAL_SEGMENTS, sizeof(SegmentMetrics));
-    if (!all_metrics) {
+    if (!all_metrics)
+    {
         printf("[ERROR] Failed to allocate metrics storage\n");
         // Clean up allocated memory
         free(bw_history);
@@ -280,8 +295,8 @@ int main() {
 
     // Initial state variables
     float buffer_level = INITIAL_BUFFER_SIZE; // Player buffer level in seconds
-    int last_quality = 2; // Start with medium quality (index 2)
-    bw_t predicted_bw = 5000000; // Initial bandwidth estimate: 5 Mbps
+    int last_quality = 2;                     // Start with medium quality (index 2)
+    bw_t predicted_bw = 5000000;              // Initial bandwidth estimate: 5 Mbps
 
     printf("[INIT] ✓ All components initialized successfully\n\n");
 
@@ -292,14 +307,15 @@ int main() {
 
     // Loop through each segment to be streamed
     // CHANGED: Reverted to 0-based loop to match server logs and file names
-    for (COUNT segment_id = 0; segment_id <= TOTAL_SEGMENTS; segment_id++) {
+    for (COUNT segment_id = 0; segment_id <= TOTAL_SEGMENTS; segment_id++)
+    {
         printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
         printf("  PROCESSING SEGMENT %llu / %d\n", segment_id, TOTAL_SEGMENTS); // Print 0-9
         printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
         // CHANGED: Use segment_id directly for 0-based array indexing
         SegmentMetrics *metrics = &all_metrics[segment_id];
-        metrics->segment_id = segment_id; // Store the actual segment ID (0-9)
+        metrics->segment_id = segment_id;     // Store the actual segment ID (0-9)
         metrics->buffer_level = buffer_level; // Record buffer level at the start of the segment
 
         // ----------------------------------------
@@ -309,10 +325,11 @@ int main() {
 
         // Add current viewport sample from the mock dataset to history
         // CHANGED: Use segment_id directly for 0-based array indexing
-        if (segment_id < DATASET_SIZE) {
+        if (segment_id < DATASET_SIZE)
+        {
             add_viewport_sample(&vp_predictor,
-                              viewport_dataset[segment_id].yaw,
-                              viewport_dataset[segment_id].pitch);
+                                viewport_dataset[segment_id].yaw,
+                                viewport_dataset[segment_id].pitch);
             printf("  Added sample: yaw=%.2f°, pitch=%.2f°\n",
                    viewport_dataset[segment_id].yaw,
                    viewport_dataset[segment_id].pitch);
@@ -320,18 +337,24 @@ int main() {
 
         // Predict the viewport for the next segment
         float predicted_yaw = 0.0f, predicted_pitch = 0.0f;
-        if (vp_predictor.sample_count >= 2) { // Need at least 2 samples for linear regression
+        if (vp_predictor.sample_count >= 2)
+        { // Need at least 2 samples for linear regression
             ret = vpes_legr(&vp_predictor, &predicted_yaw, &predicted_pitch);
-            if (ret == RET_SUCCESS) {
+            if (ret == RET_SUCCESS)
+            {
                 printf("  Predicted viewport: yaw=%.2f°, pitch=%.2f°\n",
                        predicted_yaw, predicted_pitch);
-            } else {
+            }
+            else
+            {
                 // Fallback to default if prediction fails
                 printf("  Using default viewport (0°, 0°)\n");
                 predicted_yaw = 0.0f;
                 predicted_pitch = 0.0f;
             }
-        } else {
+        }
+        else
+        {
             // Use default if not enough samples yet
             printf("  Insufficient samples, using default (0°, 0°)\n");
             predicted_yaw = 0.0f;
@@ -344,7 +367,7 @@ int main() {
 
         // Select tiles based on the predicted viewport
         int viewport_tiles[NO_OF_ROWS * NO_OF_COLS]; // Array to store IDs of selected tiles
-        int num_viewport_tiles = 0; // Number of tiles selected
+        int num_viewport_tiles = 0;                  // Number of tiles selected
         tile_selector.select_viewport(predicted_yaw, predicted_pitch,
                                       viewport_tiles,
                                       NO_OF_ROWS * NO_OF_COLS, // Max possible tiles
@@ -352,7 +375,8 @@ int main() {
 
         // Print selected viewport tiles
         printf("  Selected %d viewport tiles: [", num_viewport_tiles);
-        for (int i = 0; i < num_viewport_tiles; i++) {
+        for (int i = 0; i < num_viewport_tiles; i++)
+        {
             printf("%d%s", viewport_tiles[i],
                    (i < num_viewport_tiles - 1) ? ", " : "");
         }
@@ -365,19 +389,25 @@ int main() {
         printf("\n[STEP 2] Bandwidth Estimation\n");
 
         // Estimate bandwidth based on history
-        if (bw_history_count > 0) {
+        if (bw_history_count > 0)
+        {
             ret = bw_estimator_post_harmonic_mean(bw_history,
                                                   bw_history_count,
                                                   &predicted_bw);
-            if (ret == RET_SUCCESS) {
+            if (ret == RET_SUCCESS)
+            {
                 printf("  Harmonic mean BW: %.2f Mbps (from %zu samples)\n",
                        predicted_bw / 1000000.0, bw_history_count);
-            } else {
+            }
+            else
+            {
                 // Use previous estimate if calculation fails
                 printf("  Using previous estimate: %.2f Mbps\n",
                        predicted_bw / 1000000.0);
             }
-        } else {
+        }
+        else
+        {
             // Use initial estimate if no history yet
             printf("  No history yet, using initial estimate: %.2f Mbps\n",
                    predicted_bw / 1000000.0);
@@ -391,15 +421,20 @@ int main() {
         printf("\n[STEP 3] ABR Quality Selection\n");
 
         // Adjust ABR strategy based on current buffer level
-        if (buffer_level < B_MIN) {
+        if (buffer_level < B_MIN)
+        {
             printf("  Buffer DANGER (%.2fs < %.2fs) - Conservative mode\n",
                    buffer_level, B_MIN);
             abr_selector_init(&abr_selector, ABR_FOR_DANGER_BUF); // Switch to conservative ABR
-        } else if (buffer_level >= B_HIGH) {
+        }
+        else if (buffer_level >= B_HIGH)
+        {
             printf("  Buffer HIGH (%.2fs >= %.2fs) - Aggressive mode\n",
                    buffer_level, B_HIGH);
             abr_selector_init(&abr_selector, ABR_FOR_HIGH_BUF); // Switch to aggressive ABR
-        } else {
+        }
+        else
+        {
             printf("  Buffer NORMAL (%.2fs to %.2fs) - Normal mode\n",
                    buffer_level, B_NORMAL);
             abr_selector_init(&abr_selector, ABR_FOR_NORMAL_BUF); // Use normal ABR
@@ -418,7 +453,6 @@ int main() {
         // int chosen_quality = 4;
         printf("  [DEBUG] Forcing quality 4 (QP20) to match server files.\n");
 
-
         printf("  Chosen quality: %d (QP: %d)\n",
                chosen_quality, tile_version_to_num(chosen_quality));
         printf("  Previous quality: %d\n", last_quality);
@@ -427,7 +461,8 @@ int main() {
 
         // Prepare an array containing the chosen quality for each viewport tile
         int *chosen_versions = (int *)malloc(num_viewport_tiles * sizeof(int));
-        for (int i = 0; i < num_viewport_tiles; i++) {
+        for (int i = 0; i < num_viewport_tiles; i++)
+        {
             chosen_versions[i] = chosen_quality;
         }
 
@@ -446,15 +481,17 @@ int main() {
                                             segment_id,
                                             viewport_tiles,
                                             num_viewport_tiles,
-                                            chosen_versions);
+                                            chosen_versions,
+                                            STREAM_HTTP_2_0);
 
         clock_gettime(CLOCK_MONOTONIC, &end_time);
 
         // Check if download was successful
-        if (ret != RET_SUCCESS) {
+        if (ret != RET_SUCCESS)
+        {
             printf("  [ERROR] Download failed for segment %llu\n", segment_id);
             free(chosen_versions); // Clean up allocated memory
-            continue; // Skip to the next segment
+            continue;              // Skip to the next segment
         }
 
         // ----------------------------------------
@@ -464,23 +501,28 @@ int main() {
 
         // Calculate download performance metrics
         double download_time_ms = (end_time.tv_sec - start_time.tv_sec) * 1000.0 +
-                                 (end_time.tv_nsec - start_time.tv_nsec) / 1000000.0;
+                                  (end_time.tv_nsec - start_time.tv_nsec) / 1000000.0;
 
         size_t total_bytes = 0; // Total bytes downloaded in this segment
         double avg_speed = 0;   // Average download speed for this segment
         int tile_count = 0;     // Number of tiles successfully downloaded
 
         // Iterate through download results for each tile
-        for (COUNT i = 0; i < request_handler.tile_count; i++) {
-            if (request_handler.size_dl[i] > 0) { // Check if tile was downloaded
+        for (COUNT i = 0; i < request_handler.tile_count; i++)
+        {
+            if (request_handler.size_dl[i] > 0)
+            { // Check if tile was downloaded
                 total_bytes += request_handler.size_dl[i];
                 avg_speed += request_handler.dls[i]; // Add individual tile speed
                 tile_count++;
 
                 // Update bandwidth history (circular buffer)
-                if (bw_history_count < HISTORY_SIZE) {
+                if (bw_history_count < HISTORY_SIZE)
+                {
                     bw_history[bw_history_count++] = request_handler.dls[i];
-                } else {
+                }
+                else
+                {
                     // Shift history and add new sample
                     memmove(bw_history, bw_history + 1, (HISTORY_SIZE - 1) * sizeof(bw_t));
                     bw_history[HISTORY_SIZE - 1] = request_handler.dls[i];
@@ -489,7 +531,8 @@ int main() {
         }
 
         // Calculate average speed if any tiles were downloaded
-        if (tile_count > 0) {
+        if (tile_count > 0)
+        {
             avg_speed /= tile_count;
         }
 
@@ -502,7 +545,7 @@ int main() {
         float download_time_sec = download_time_ms / 1000.0;
         float old_buffer_level = buffer_level; // Store old level for printing
         buffer_level = buffer_level - download_time_sec + SEGMENT_DURATION;
-        buffer_level = (buffer_level < 0) ? 0 : buffer_level; // Clamp buffer at 0
+        buffer_level = (buffer_level < 0) ? 0 : buffer_level;                             // Clamp buffer at 0
         buffer_level = (buffer_level > MAX_BUFFER_SIZE) ? MAX_BUFFER_SIZE : buffer_level; // Clamp buffer at max size
 
         // Print updated state information
@@ -524,7 +567,8 @@ int main() {
         free(chosen_versions); // Clean up allocated memory for chosen versions
 
         // Check for potential rebuffering (buffer close to empty)
-        if (buffer_level < 0.1f) {
+        if (buffer_level < 0.1f)
+        {
             printf("\n[WARNING] Buffer underrun detected! Pausing...\n");
             // In a real system, playback would pause here until buffer refills
         }
@@ -552,5 +596,3 @@ int main() {
 
     return 0; // Indicate successful execution
 }
-
-

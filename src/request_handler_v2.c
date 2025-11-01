@@ -3,58 +3,193 @@
 #include <string.h>
 #include <stdlib.h>
 
+// RET request_handler_v2_init(request_handler_v2_t *self,
+//                             const char *ser_adrr,
+//                             COUNT seg_count,
+//                             COUNT version_count,
+//                             COUNT tile_count,
+//                             HTTP_VERSION protocol,
+//                             int max_parallel_downloads)
+// {
+//     if (!self || !ser_addr) return RET_FAIL;
+    
+//     memset(self, 0, sizeof(request_handler_v2_t));
+    
+//     self->ser_addr = (char *)ser_addr;
+//     self->seg_count = seg_count;
+//     self->tile_count = tile_count;
+//     self->version_count = version_count;
+//     self->max_parallel_downloads = max_parallel;
+    
+//     /* Initialize HTTP connection pool */
+//     if (http_pool_init(&self->http_pool, http_ver) != RET_SUCCESS) {
+//         return RET_FAIL;
+//     }
+    
+//     /* Allocate arrays */
+//     self->data = (buffer_t *)calloc(tile_count, sizeof(buffer_t));
+//     if (!self->data) goto cleanup;
+    
+//     for (COUNT i = 0; i < tile_count; i++) {
+//         if (buffer_init(&self->data[i]) != RET_SUCCESS) {
+//             for (COUNT j = 0; j < i; j++) {
+//                 buffer_destroy(&self->data[j]);
+//             }
+//             goto cleanup;
+//         }
+//     }
+    
+//     self->dls = (bw_t *)calloc(tile_count, sizeof(bw_t));
+//     self->cnnt = (count_time_t *)calloc(tile_count, sizeof(count_time_t));
+//     self->pre_trans_time = (count_time_t *)calloc(tile_count, sizeof(count_time_t));
+//     self->start_trans_time = (count_time_t *)calloc(tile_count, sizeof(count_time_t));
+//     self->total_time = (count_time_t *)calloc(tile_count, sizeof(count_time_t));
+//     self->size_dl = (count_time_t *)calloc(tile_count, sizeof(count_time_t));
+    
+//     if (!self->dls || !self->cnnt || !self->pre_trans_time || 
+//         !self->start_trans_time || !self->total_time || !self->size_dl) {
+//         goto cleanup;
+//     }
+    
+//     return RET_SUCCESS;
+    
+// cleanup:
+//     request_handler_v2_destroy(self);
+//     return RET_FAIL;
+// }
+
 RET request_handler_v2_init(request_handler_v2_t *self,
-                            const char *ser_addr,
+                            const char *ser_adrr,
                             COUNT seg_count,
                             COUNT version_count,
                             COUNT tile_count,
-                            HTTP_VERSION http_ver,
-                            int max_parallel) {
-    if (!self || !ser_addr) return RET_FAIL;
+                            HTTP_VERSION protocol,
+                            int max_parallel_downloads)
+{
+  self->ser_addr = (char *)ser_adrr;
+  self->seg_count = seg_count;
+  self->tile_count = tile_count;
+  self->version_count = version_count;
+
+  // 1. Khởi tạo pool
+  self->pool = (http_pool_t *)malloc(sizeof(http_pool_t));
+  if (self->pool == NULL)
+  {
+    return RET_FAIL;
+  }
+  if (http_pool_init(self->pool, protocol, max_parallel_downloads) != RET_SUCCESS)
+  {
+    free(self->pool);
+    return RET_FAIL;
+  }
+
+  // 2. Khởi tạo các buffer dữ liệu (giống v1)
+  self->data = (buffer_t *)malloc(tile_count * sizeof(buffer_t));
+  if (self->data == NULL)
+  {
+    http_pool_destroy(self->pool);
+    free(self->pool);
+    return RET_FAIL;
+  }
+
+  for (COUNT i = 0; i < tile_count; i++)
+  {
+    if (buffer_init(&self->data[i]) != RET_SUCCESS)
+    {
+      for (COUNT j = 0; j < i; j++)
+      {
+        buffer_destroy(&self->data[j]);
+      }
+      free(self->data);
+      http_pool_destroy(self->pool);
+      free(self->pool);
+      return RET_FAIL;
+    }
+  }
+
+  return RET_SUCCESS;
+}
+
+static void calculate_group_stats_v2(download_job_t *job_group,
+                                     int num_tiles_in_group,
+                                     tile_group_stats_t *stats)
+{
+    memset(stats, 0, sizeof(tile_group_stats_t));
     
-    memset(self, 0, sizeof(request_handler_v2_t));
+    stats->min_download_speed = UINT64_MAX;
+    stats->max_download_speed = 0;
     
-    self->ser_addr = (char *)ser_addr;
-    self->seg_count = seg_count;
-    self->tile_count = tile_count;
-    self->version_count = version_count;
-    self->max_parallel_downloads = max_parallel;
-    
-    /* Initialize HTTP connection pool */
-    if (http_pool_init(&self->http_pool, http_ver) != RET_SUCCESS) {
-        return RET_FAIL;
+    count_time_t *timing_array = NULL;
+    if (num_tiles_in_group > 1) {
+        timing_array = (count_time_t *)malloc(num_tiles_in_group * sizeof(count_time_t));
     }
     
-    /* Allocate arrays */
-    self->data = (buffer_t *)calloc(tile_count, sizeof(buffer_t));
-    if (!self->data) goto cleanup;
-    
-    for (COUNT i = 0; i < tile_count; i++) {
-        if (buffer_init(&self->data[i]) != RET_SUCCESS) {
-            for (COUNT j = 0; j < i; j++) {
-                buffer_destroy(&self->data[j]);
+    for (int i = 0; i < num_tiles_in_group; i++) {
+        download_job_t *job = &job_group[i];
+        
+        // Chỉ tính toán nếu request thành công
+        if (job->status == JOB_STATUS_COMPLETED && job->metrics.size_download > 0) {
+            
+            http_metrics_t *metrics = &job->metrics;
+
+            // Basic metrics
+            stats->total_connect_time += metrics->connect_time;
+            stats->total_pretransfer_time += metrics->pretransfer_time;
+            stats->total_starttransfer_time += metrics->starttransfer_time;
+            stats->total_time += metrics->total_time;
+            stats->avg_download_speed += metrics->speed_download;
+            stats->total_size += metrics->size_download;
+            
+            // Min/Max speed
+            if (metrics->speed_download < stats->min_download_speed) {
+                stats->min_download_speed = metrics->speed_download;
             }
-            goto cleanup;
+            if (metrics->speed_download > stats->max_download_speed) {
+                stats->max_download_speed = metrics->speed_download;
+            }
+            
+            // NEW: Advanced metrics
+            stats->avg_namelookup_time += metrics->namelookup_time;
+            stats->avg_appconnect_time += metrics->appconnect_time;
+            stats->num_connections_reused += metrics->connection_reused;
+            
+            // Store timing for jitter calculation
+            if (timing_array) {
+                timing_array[stats->tile_count] = metrics->total_time;
+            }
+            
+            stats->tile_count++;
         }
     }
     
-    self->dls = (bw_t *)calloc(tile_count, sizeof(bw_t));
-    self->cnnt = (count_time_t *)calloc(tile_count, sizeof(count_time_t));
-    self->pre_trans_time = (count_time_t *)calloc(tile_count, sizeof(count_time_t));
-    self->start_trans_time = (count_time_t *)calloc(tile_count, sizeof(count_time_t));
-    self->total_time = (count_time_t *)calloc(tile_count, sizeof(count_time_t));
-    self->size_dl = (count_time_t *)calloc(tile_count, sizeof(count_time_t));
-    
-    if (!self->dls || !self->cnnt || !self->pre_trans_time || 
-        !self->start_trans_time || !self->total_time || !self->size_dl) {
-        goto cleanup;
+    if (stats->tile_count > 0) {
+        // Calculate averages
+        stats->avg_connect_time = stats->total_connect_time / stats->tile_count;
+        stats->avg_pretransfer_time = stats->total_pretransfer_time / stats->tile_count;
+        stats->avg_starttransfer_time = stats->total_starttransfer_time / stats->tile_count;
+        stats->avg_total_time = stats->total_time / stats->tile_count;
+        stats->avg_download_speed = stats->avg_download_speed / stats->tile_count;
+        stats->avg_size = stats->total_size / stats->tile_count;
+        stats->avg_namelookup_time = stats->avg_namelookup_time / stats->tile_count;
+        stats->avg_appconnect_time = stats->avg_appconnect_time / stats->tile_count;
+        
+        // Calculate jitter (standard deviation of timing)
+        if (stats->tile_count > 1 && timing_array) {
+            double variance = 0.0;
+            double mean = (double)stats->avg_total_time; // Chuyển sang double để tính toán
+            
+            for (int i = 0; i < stats->tile_count; i++) {
+                double diff = (double)timing_array[i] - mean;
+                variance += diff * diff;
+            }
+            variance /= stats->tile_count;
+            stats->jitter_ms = sqrt(variance) / 1000.0; // Convert to ms
+        }
     }
     
-    return RET_SUCCESS;
-    
-cleanup:
-    request_handler_v2_destroy(self);
-    return RET_FAIL;
+    if (timing_array) {
+        free(timing_array);
+    }
 }
 
 RET request_handler_v2_post_get_info(request_handler_v2_t *self,

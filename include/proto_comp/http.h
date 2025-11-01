@@ -17,6 +17,10 @@ RET http_get_to_buffer(const char   *url,
                        count_time_t *pre_trans_time,
                        count_time_t *start_trans_time,
                        count_time_t *total_time,
-                       count_time_t *size_dl);
+                       count_time_t *size_dl,
+                       // NEW PARAMETERS:
+                       count_time_t *namelookup_time,
+                       count_time_t *appconnect_time,
+                       int          *connection_reused);
 
 #endif

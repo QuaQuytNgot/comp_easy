@@ -5,8 +5,8 @@
 CLIENT_PROGRAM="./build/my_program"
 
 # Set the output log file names
-PIDSTAT_LOG="client_stats.log"
-PERF_DATA_FILE="perf.data.http3" # Change this for http2 tests
+PIDSTAT_LOG="client_stats_http2.log"
+PERF_DATA_FILE="perf.data.http2" # Change this for http2 tests
 
 # --- Test Execution ---
 echo "Starting client program in the background..."

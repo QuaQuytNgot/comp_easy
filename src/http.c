@@ -1,19 +1,19 @@
 #include <proto_comp/buffer.h>
 #include <proto_comp/define.h>
 #include <proto_comp/http.h>
-#include <string.h> 
+#include <string.h>
 
 size_t
 write_callback(void *data, size_t size, size_t nmemb, void *userdata)
 {
-  size_t    realsize = 0;
-  buffer_t *buf      = NULL_POINTER;
-  char     *ptr      = NULL_POINTER;
+  size_t realsize = 0;
+  buffer_t *buf = NULL_POINTER;
+  char *ptr = NULL_POINTER;
 
-  realsize           = size * nmemb;
-  buf                = (buffer_t *)userdata;
+  realsize = size * nmemb;
+  buf = (buffer_t *)userdata;
 
-  ptr                = realloc(buf->data, buf->size + realsize + 1);
+  ptr = realloc(buf->data, buf->size + realsize + 1);
   if (ptr == NULL)
   {
     return 0;
@@ -26,18 +26,22 @@ write_callback(void *data, size_t size, size_t nmemb, void *userdata)
   return realsize;
 }
 
-RET http_get_to_buffer(const char   *url,
-                       HTTP_VERSION  ver,
-                       buffer_t     *data,
-                       bw_t         *dls,
+RET http_get_to_buffer(const char *url,
+                       HTTP_VERSION ver,
+                       buffer_t *data,
+                       bw_t *dls,
                        count_time_t *cnnt,
                        count_time_t *pre_trans_time,
                        count_time_t *start_trans_time,
                        count_time_t *total_time,
-                       count_time_t *size_dl)
+                       count_time_t *size_dl,
+                       // NEW PARAMETERS:
+                       count_time_t *namelookup_time,
+                       count_time_t *appconnect_time,
+                       int *connection_reused)
 {
-  CURL    *curl = curl_easy_init();
-  CURLcode res  = 0;
+  CURL *curl = curl_easy_init();
+  CURLcode res = 0;
 
   if (!curl)
   {
@@ -65,7 +69,7 @@ RET http_get_to_buffer(const char   *url,
     curl_easy_setopt(
         curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
     break;
-    
+
   case STREAM_HTTP_2_0:
     curl_easy_setopt(curl, CURLOPT_FTP_SKIP_PASV_IP, 1L);
     curl_easy_setopt(curl, CURLOPT_TCP_KEEPALIVE, 1L);
@@ -90,20 +94,31 @@ RET http_get_to_buffer(const char   *url,
 
   if (dls != NULL_POINTER)
   {
-    curl_easy_getinfo(
-        curl, CURLINFO_CONNECT_TIME_T, (curl_off_t *)cnnt);
-    curl_easy_getinfo(curl,
-                      CURLINFO_PRETRANSFER_TIME_T,
-                      (curl_off_t *)pre_trans_time);
-    curl_easy_getinfo(curl,
-                      CURLINFO_STARTTRANSFER_TIME_T,
-                      (curl_off_t *)start_trans_time);
-    curl_easy_getinfo(
-        curl, CURLINFO_TOTAL_TIME_T, (curl_off_t *)total_time);
-    curl_easy_getinfo(
-        curl, CURLINFO_SPEED_DOWNLOAD_T, (curl_off_t *)dls);
-    curl_easy_getinfo(
-        curl, CURLINFO_SIZE_DOWNLOAD_T, (curl_off_t *)size_dl);
+    // Existing metrics
+    curl_easy_getinfo(curl, CURLINFO_CONNECT_TIME_T, (curl_off_t *)cnnt);
+    curl_easy_getinfo(curl, CURLINFO_PRETRANSFER_TIME_T, (curl_off_t *)pre_trans_time);
+    curl_easy_getinfo(curl, CURLINFO_STARTTRANSFER_TIME_T, (curl_off_t *)start_trans_time);
+    curl_easy_getinfo(curl, CURLINFO_TOTAL_TIME_T, (curl_off_t *)total_time);
+    curl_easy_getinfo(curl, CURLINFO_SPEED_DOWNLOAD_T, (curl_off_t *)dls);
+    curl_easy_getinfo(curl, CURLINFO_SIZE_DOWNLOAD_T, (curl_off_t *)size_dl);
+
+    // NEW METRICS:
+    if (namelookup_time != NULL_POINTER)
+    {
+      curl_easy_getinfo(curl, CURLINFO_NAMELOOKUP_TIME_T, (curl_off_t *)namelookup_time);
+    }
+
+    if (appconnect_time != NULL_POINTER)
+    {
+      curl_easy_getinfo(curl, CURLINFO_APPCONNECT_TIME_T, (curl_off_t *)appconnect_time);
+    }
+
+    if (connection_reused != NULL_POINTER)
+    {
+      long reused = 0;
+      curl_easy_getinfo(curl, CURLINFO_CONN_ID, &reused);
+      *connection_reused = (reused > 0) ? 1 : 0;
+    }
   }
 
   curl_easy_cleanup(curl);

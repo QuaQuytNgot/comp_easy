@@ -1,0 +1,49 @@
+Linux 6.8.0-84-generic (fil-Vostro-3671) 	01/11/2025 	_x86_64_	(6 CPU)
+
+16:51:24      UID       PID    %usr %system  %guest   %wait    %CPU   CPU  Command
+16:51:25     1000    828749   72,00   17,00    0,00    2,00   89,00     2  my_program
+
+16:51:24      UID       PID  minflt/s  majflt/s     VSZ     RSS   %MEM  Command
+16:51:25     1000    828749   1015,00      0,00    9892    5980   0,08  my_program
+
+16:51:25      UID       PID    %usr %system  %guest   %wait    %CPU   CPU  Command
+16:51:26     1000    828749   75,00   14,00    0,00    0,00   89,00     3  my_program
+
+16:51:25      UID       PID  minflt/s  majflt/s     VSZ     RSS   %MEM  Command
+16:51:26     1000    828749    345,00      0,00    9812    5904   0,07  my_program
+
+16:51:26      UID       PID    %usr %system  %guest   %wait    %CPU   CPU  Command
+16:51:27     1000    828749   76,00   17,00    0,00    1,00   93,00     1  my_program
+
+16:51:26      UID       PID  minflt/s  majflt/s     VSZ     RSS   %MEM  Command
+16:51:27     1000    828749    296,00      0,00    9936    5732   0,07  my_program
+
+16:51:27      UID       PID    %usr %system  %guest   %wait    %CPU   CPU  Command
+16:51:28     1000    828749   74,00   17,00    0,00    0,00   91,00     0  my_program
+
+16:51:27      UID       PID  minflt/s  majflt/s     VSZ     RSS   %MEM  Command
+16:51:28     1000    828749    409,00      0,00    9524    5588   0,07  my_program
+
+16:51:28      UID       PID    %usr %system  %guest   %wait    %CPU   CPU  Command
+16:51:29     1000    828749   76,00   17,00    0,00    0,00   93,00     5  my_program
+
+16:51:28      UID       PID  minflt/s  majflt/s     VSZ     RSS   %MEM  Command
+16:51:29     1000    828749    435,00      0,00   10112    6140   0,08  my_program
+
+16:51:29      UID       PID    %usr %system  %guest   %wait    %CPU   CPU  Command
+16:51:30     1000    828749   74,00   18,00    0,00    0,00   92,00     1  my_program
+
+16:51:29      UID       PID  minflt/s  majflt/s     VSZ     RSS   %MEM  Command
+16:51:30     1000    828749    376,00      0,00   10276    6268   0,08  my_program
+
+16:51:30      UID       PID    %usr %system  %guest   %wait    %CPU   CPU  Command
+16:51:31     1000    828749   78,00   16,00    0,00    0,00   94,00     5  my_program
+
+16:51:30      UID       PID  minflt/s  majflt/s     VSZ     RSS   %MEM  Command
+16:51:31     1000    828749    275,00      0,00    9996    6120   0,08  my_program
+
+16:51:31      UID       PID    %usr %system  %guest   %wait    %CPU   CPU  Command
+16:51:32     1000    828749   77,00   15,00    0,00    0,00   92,00     5  my_program
+
+16:51:31      UID       PID  minflt/s  majflt/s     VSZ     RSS   %MEM  Command
+16:51:32     1000    828749    334,00      0,00   10388    6528   0,08  my_program
