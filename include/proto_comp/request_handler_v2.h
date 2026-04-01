@@ -202,12 +202,16 @@ RET request_handler_v2_init(request_handler_v2_t *self,
 RET request_handler_v2_update_pmap(request_handler_v2_t *self,
                                    const float          *p_map_src);
 
+static bool is_tile_in_actual_viewport(int tile_id, float actual_yaw, float actual_pitch);
+
 /* chosen_versions[] is used only when self->cts_out == NULL */
 RET request_handler_v2_post_get_info(request_handler_v2_t *self,
                                      COUNT                  chunk_id,
                                      int                   *vp_tiles,
                                      int                    num_vp_tiles,
                                      int                   *chosen_versions,
+                                     float                  actual_yaw,   
+                                     float                  actual_pitch,
                                      HTTP_VERSION           protocol);
 
 RET request_handler_v2_reset(request_handler_v2_t *self);

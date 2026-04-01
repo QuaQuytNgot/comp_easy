@@ -659,12 +659,25 @@ static void calc_group_stats(request_handler_v2_t *self,
     if (ta) free(ta);
 }
 
+static bool is_tile_in_actual_viewport(int tile_id, float actual_yaw, float actual_pitch) {
+    int row = tile_id / NO_OF_COLS;
+    int col = tile_id % NO_OF_COLS;
+    float ty = (col + 0.5f) * TILE_WIDTH - 180.0f;
+    float tp = (row + 0.5f) * TILE_HEIGHT - 90.0f;
+    float dy = fabsf(actual_yaw - ty);
+    if (dy > 180.0f) dy = 360.0f - dy;
+    float dp = fabsf(actual_pitch - tp);
+    return (dy <= 45.0f && dp <= 45.0f); // Giả sử Viewport 100x100 độ
+}
+
 /* ── post_get_info ──────────────────────────────────────────────────────── */
 RET request_handler_v2_post_get_info(request_handler_v2_t *self,
                                      COUNT                  chunk_id,
                                      int                   *vp_tiles,
                                      int                    num_vp_tiles,
                                      int                   *chosen_versions,
+                                     float                  actual_yaw,   
+                                     float                  actual_pitch,
                                      HTTP_VERSION           protocol)
 {
     if (!self || !self->pool) return RET_FAIL;
@@ -809,6 +822,41 @@ RET request_handler_v2_post_get_info(request_handler_v2_t *self,
            (all_tiles > 0) ? (all_reused * 100.0 / all_tiles) : 0.0);
     printf("====================================\n\n");
 
+    /* ── MỚI: Tính toán Wasted Ratio và QoE Drop Rate ── */
+    long long total_bytes_downloaded = 0;
+    long long wasted_bytes = 0;
+    int actual_vp_tiles_count = 0;
+    int qoe_dropped_tiles = 0;
+
+    for (int i = 0; i < self->tile_count; i++) {
+        bool in_actual_vp = is_tile_in_actual_viewport(i, actual_yaw, actual_pitch);
+        if (in_actual_vp) actual_vp_tiles_count++;
+
+        // 1. Wasted Ratio: Đã tải xong nhưng không nằm trong thực tế
+        if (self->size_dl[i] > 0) {
+            total_bytes_downloaded += self->size_dl[i];
+            if (!in_actual_vp) {
+                wasted_bytes += self->size_dl[i];
+            }
+        }
+
+        // 2. QoE Drop: Tile thực tế bị hủy (Early Terminated)
+        if (in_actual_vp) {
+            // Kiểm tra trạng thái Early Terminated đã được đánh dấu trước đó
+            if (self->cts_out && self->cts_out->tiles[i].early_terminated) {
+                qoe_dropped_tiles++;
+            }
+        }
+    }
+
+    float wasted_ratio = (total_bytes_downloaded > 0) ? 
+                         ((float)wasted_bytes / total_bytes_downloaded) : 0;
+    float qoe_drop_rate = (actual_vp_tiles_count > 0) ? 
+                          ((float)qoe_dropped_tiles / actual_vp_tiles_count) : 0;
+
+    printf("[METRICS] Wasted Ratio: %.2f%% | QoE Drop Rate: %.2f%%\n", 
+           wasted_ratio * 100.0f, qoe_drop_rate * 100.0f);
+
     /* CSV */
     FILE *csv = fopen("http_metrics_v2.csv", "a");
     if (csv) {
@@ -828,6 +876,8 @@ RET request_handler_v2_post_get_info(request_handler_v2_t *self,
                 nv_s.avg_download_speed/1e6,
                 nv_s.total_time/1000.0, nv_s.jitter_ms,
                 (nv_s.tile_count>0) ? (nv_s.num_connections_reused*100.0/nv_s.tile_count) : 0.0);
+        fprintf(csv, "%llu,%s,summary,%.4f,%.4f\n", 
+                chunk_id + 1, pname, wasted_ratio, qoe_drop_rate);
         fclose(csv);
     }
 

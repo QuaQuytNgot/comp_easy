@@ -38,7 +38,7 @@
 
 /* ── configuration ──────────────────────────────────────────────────────── */
 #define SERVER_ADDR        "https://192.168.101.17:8443"
-#define TOTAL_SEGMENTS     30
+#define TOTAL_SEGMENTS     10
 #define VP_HISTORY_SZ      20
 #define PROTOCOL           STREAM_HTTP_3_0
 #define TAU_EARLY_TERM     0.10f   /* early-term threshold τ (0=disable)    */
@@ -47,19 +47,89 @@
 /* Select active algorithm: SCHEDULER_GREEDY | SCHEDULER_RA_MPC | SCHEDULER_SLR */
 #define ACTIVE_ALGORITHM   SCHEDULER_SLR
 
+typedef struct {
+    float yaw;
+    float pitch;
+    int   timestamp;
+} ViewportSample;
+
+ViewportSample viewport_dataset[] = {
+    {0.0f, 0.0f, 0},
+    {5.0f, 2.0f, 1000},
+    {10.0f, 3.0f, 2000},
+    {15.0f, 5.0f, 3000},
+    {20.0f, 7.0f, 4000},
+    {5.0f, 2.0f, 1000},
+    {10.0f, 3.0f, 2000},
+    {15.0f, 5.0f, 3000},
+    {20.0f, 7.0f, 4000},
+    {5.0f, 2.0f, 1000},
+    {10.0f, 3.0f, 2000},
+    {15.0f, 5.0f, 3000},
+    {20.0f, 7.0f, 4000},
+    {5.0f, 2.0f, 1000},
+    {10.0f, 3.0f, 2000},
+    {15.0f, 5.0f, 3000},
+    {20.0f, 7.0f, 4000},
+    {5.0f, 2.0f, 1000},
+    {10.0f, 3.0f, 2000},
+    {15.0f, 5.0f, 3000},
+    {20.0f, 7.0f, 4000},
+    {5.0f, 2.0f, 1000},
+    {10.0f, 3.0f, 2000},
+    {15.0f, 5.0f, 3000},
+    {20.0f, 7.0f, 4000},
+    {5.0f, 2.0f, 1000},
+    {10.0f, 3.0f, 2000},
+    {15.0f, 5.0f, 3000},
+    {20.0f, 7.0f, 4000},
+    {5.0f, 2.0f, 1000},
+    {10.0f, 3.0f, 2000},
+    {15.0f, 5.0f, 3000},
+    {20.0f, 7.0f, 4000},
+    {5.0f, 2.0f, 1000},
+    {10.0f, 3.0f, 2000},
+    {15.0f, 5.0f, 3000},
+    {20.0f, 7.0f, 4000}
+    // Add more samples...
+};
+
 /* ── probability map (Gaussian viewport model) ──────────────────────────── */
-static void build_pmap(float yaw, float pitch, float *p, int n)
+// static void build_pmap(float yaw, float pitch, float *p, int n)
+// {
+//     const float sigma = VIEWPORT_WIDTH_DEGREES / 2.0f;
+//     const float two_s2 = 2.0f * sigma * sigma;
+//     for (int i = 0; i < n; i++) {
+//         int   row = i / NO_OF_COLS, col = i % NO_OF_COLS;
+//         float ty  = (col + 0.5f) * TILE_WIDTH  - 180.0f;
+//         float tp  = (row + 0.5f) * TILE_HEIGHT -  90.0f;
+//         float dy  = yaw - ty;
+//         if (dy >  180.0f) dy -= 360.0f;
+//         if (dy < -180.0f) dy += 360.0f;
+//         float dp  = pitch - tp;
+//         float pi  = expf(-(dy*dy + dp*dp) / two_s2);
+//         p[i] = (pi > 1.0f) ? 1.0f : (pi < 0.0f) ? 0.0f : pi;
+//     }
+// }
+
+// Thêm tham số sigma vào hàm
+static void build_pmap_adaptive(float yaw, float pitch, float *p, int n, float adaptive_sigma)
 {
-    const float sigma = VIEWPORT_WIDTH_DEGREES / 2.0f;
-    const float two_s2 = 2.0f * sigma * sigma;
+    // Sử dụng adaptive_sigma thay vì hằng số cố định
+    const float two_s2 = 2.0f * adaptive_sigma * adaptive_sigma; 
+    
     for (int i = 0; i < n; i++) {
         int   row = i / NO_OF_COLS, col = i % NO_OF_COLS;
         float ty  = (col + 0.5f) * TILE_WIDTH  - 180.0f;
         float tp  = (row + 0.5f) * TILE_HEIGHT -  90.0f;
+        
         float dy  = yaw - ty;
         if (dy >  180.0f) dy -= 360.0f;
         if (dy < -180.0f) dy += 360.0f;
+        
         float dp  = pitch - tp;
+        
+        // Tính xác suất p_i dựa trên adaptive_sigma
         float pi  = expf(-(dy*dy + dp*dp) / two_s2);
         p[i] = (pi > 1.0f) ? 1.0f : (pi < 0.0f) ? 0.0f : pi;
     }
@@ -148,6 +218,10 @@ int main(void)
     for (COUNT seg = 0; seg < TOTAL_SEGMENTS; seg++) {
         printf("━━━━━━  SEG %llu  buf=%.2fs  ━━━━━━\n", seg+1, buf_level);
 
+        int data_idx = (seg < (sizeof(viewport_dataset)/sizeof(ViewportSample))) ? seg : 0;
+        float actual_yaw   = viewport_dataset[data_idx].yaw;
+        float actual_pitch = viewport_dataset[data_idx].pitch;
+
         /* Step A: system resource sample */
         resource_monitor_update(&rm);
         float rho  = get_system_status(&rm);
@@ -163,7 +237,15 @@ int main(void)
             printf("[VP] prediction failed — using last centre\n");
 
         /* Step C: probability map + VP tile list */
-        build_pmap(pred_yaw, pred_pit, p_map, tile_count);
+        // build_pmap(pred_yaw, pred_pit, p_map, tile_count);
+        // Giả sử lấy mẫu từ lịch sử dự đoán
+        float velocity = fabsf(pred_yaw - yaw_h[(vpes.current_index - 1 + VP_HISTORY_SZ) % VP_HISTORY_SZ]);
+
+        // Nếu quay nhanh (> 20 độ/s), tăng sigma lên 1.5 lần, ngược lại giữ nguyên hoặc thu nhỏ
+        float my_adaptive_sigma = (velocity > 20.0f) ? (VIEWPORT_WIDTH_DEGREES * 0.75f) : (VIEWPORT_WIDTH_DEGREES / 2.0f);
+
+        build_pmap_adaptive(pred_yaw, pred_pit, p_map, tile_count, my_adaptive_sigma);
+
         request_handler_v2_update_pmap(&rh, p_map);
         int nvp = build_vp_list(p_map, tile_count, vp_tiles, 0.5f);
         printf("[PM] %d viewport tiles\n", nvp);
@@ -223,10 +305,14 @@ int main(void)
 
         /* Step F: parallel download with early termination */
         rh.cts_out = &sched_out;
-        if (request_handler_v2_post_get_info(&rh, seg,
-                                             vp_tiles, nvp,
-                                             NULL, PROTOCOL)
-            != RET_SUCCESS)
+        if (request_handler_v2_post_get_info(&rh, 
+                                             seg, 
+                                             vp_tiles, 
+                                             nvp, 
+                                             NULL,
+                                             actual_yaw, 
+                                             actual_pitch, 
+                                             PROTOCOL) != RET_SUCCESS)
             fprintf(stderr, "[main] download seg %llu failed\n", seg+1);
 
         /* Step G: update bandwidth history from measured download speed */
@@ -246,9 +332,9 @@ int main(void)
         if (buf_level > MAX_BUFFER_SIZE) buf_level = MAX_BUFFER_SIZE;
 
         /* Step I: add simulated HMD sample */
-        float sim_yaw = fmodf(180.0f + (float)seg * 3.5f, 360.0f);
-        float sim_pit = fminf((float)seg * 0.8f, 25.0f);
-        add_viewport_sample(&vpes, sim_yaw, sim_pit);
+        // float sim_yaw = fmodf(180.0f + (float)seg * 3.5f, 360.0f);
+        // float sim_pit = fminf((float)seg * 0.8f, 25.0f);
+        add_viewport_sample(&vpes, actual_yaw, actual_pitch);
 
         request_handler_v2_reset(&rh);
     }
