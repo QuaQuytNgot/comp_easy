@@ -522,11 +522,21 @@
  */
 
 #include "proto_comp/request_handler_v2.h"
+#include "proto_comp/viewport_prediction.h"   /* wrap_angle_360, clamp_pitch */
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-
-/* ── init ───────────────────────────────────────────────────────────────── */
+#include <math.h>
+ 
+/* Half-extents of the 90×90° viewport */
+#ifndef VP_HALF_YAW
+#  define VP_HALF_YAW   (VIEWPORT_WIDTH_DEGREES  / 2.0f)   /* 45° */
+#endif
+#ifndef VP_HALF_PITCH
+#  define VP_HALF_PITCH (VIEWPORT_HEIGHT_DEGREES / 2.0f)   /* 45° */
+#endif
+ 
+/* ── init ─────────────────────────────────────────────────────────────── */
 RET request_handler_v2_init(request_handler_v2_t *self,
                             const char           *ser_adrr,
                             COUNT                 seg_count,
@@ -536,7 +546,7 @@ RET request_handler_v2_init(request_handler_v2_t *self,
                             int                   max_parallel_downloads)
 {
     if (!self || !ser_adrr) return RET_FAIL;
-
+ 
     memset(self, 0, sizeof(request_handler_v2_t));
     self->ser_addr               = (char *)ser_adrr;
     self->seg_count              = seg_count;
@@ -545,20 +555,20 @@ RET request_handler_v2_init(request_handler_v2_t *self,
     self->max_parallel_downloads = max_parallel_downloads;
     self->cts_out                = NULL;
     self->early_term_count       = 0;
-
+ 
     self->pool = (http_pool_t *)malloc(sizeof(http_pool_t));
     if (!self->pool) return RET_FAIL;
-
+ 
     if (http_pool_init(self->pool, protocol, max_parallel_downloads)
         != RET_SUCCESS) {
         free(self->pool);
         return RET_FAIL;
     }
-
+ 
 #define ALLOC(field, type) \
     self->field = (type *)calloc(tile_count, sizeof(type)); \
     if (!self->field) goto cleanup;
-
+ 
     self->data = (buffer_t *)calloc(tile_count, sizeof(buffer_t));
     if (!self->data) goto cleanup;
     for (COUNT i = 0; i < tile_count; i++) {
@@ -567,7 +577,7 @@ RET request_handler_v2_init(request_handler_v2_t *self,
             goto cleanup;
         }
     }
-
+ 
     ALLOC(dls,               bw_t)
     ALLOC(cnnt,              count_time_t)
     ALLOC(pre_trans_time,    count_time_t)
@@ -580,20 +590,19 @@ RET request_handler_v2_init(request_handler_v2_t *self,
     ALLOC(header_size,       size_t)
     ALLOC(redirect_count,    count_t)
     ALLOC(connection_reused, int)
-
-    /* probability map — initially 0; filled by update_pmap() each segment */
+ 
     self->p_map = (float *)calloc(tile_count, sizeof(float));
     if (!self->p_map) goto cleanup;
 #undef ALLOC
-
+ 
     return RET_SUCCESS;
-
+ 
 cleanup:
     request_handler_v2_destroy(self);
     return RET_FAIL;
 }
-
-/* ── update_pmap ────────────────────────────────────────────────────────── */
+ 
+/* ── update_pmap ─────────────────────────────────────────────────────── */
 RET request_handler_v2_update_pmap(request_handler_v2_t *self,
                                    const float          *p_map_src)
 {
@@ -601,22 +610,22 @@ RET request_handler_v2_update_pmap(request_handler_v2_t *self,
     memcpy(self->p_map, p_map_src, self->tile_count * sizeof(float));
     return RET_SUCCESS;
 }
-
-/* ── group statistics (unchanged logic) ─────────────────────────────────── */
+ 
+/* ── group statistics ────────────────────────────────────────────────── */
 static void calc_group_stats(request_handler_v2_t *self,
                              int *tile_ids, int num,
                              tile_group_stats_t *s)
 {
     memset(s, 0, sizeof(*s));
     s->min_download_speed = UINT64_MAX;
-
+ 
     count_time_t *ta = (num > 1)
         ? (count_time_t *)malloc(num * sizeof(count_time_t)) : NULL;
-
+ 
     for (int i = 0; i < num; i++) {
         int tid = tile_ids[i];
         if (self->size_dl[tid] == 0) continue;
-
+ 
         s->total_namelookup_time    += self->namelookup_time[tid];
         s->total_connect_time       += self->cnnt[tid];
         s->total_appconnect_time    += self->appconnect_time[tid];
@@ -634,7 +643,7 @@ static void calc_group_stats(request_handler_v2_t *self,
         if (ta) ta[s->tile_count] = self->total_time[tid];
         s->tile_count++;
     }
-
+ 
     if (s->tile_count > 0) {
         s->avg_namelookup_time    = s->total_namelookup_time    / s->tile_count;
         s->avg_connect_time       = s->total_connect_time       / s->tile_count;
@@ -646,7 +655,7 @@ static void calc_group_stats(request_handler_v2_t *self,
         s->avg_size               = s->total_size               / s->tile_count;
         s->avg_header_size        = s->avg_header_size          / s->tile_count;
         s->avg_redirect_time_ms   = s->avg_redirect_time_ms     / s->tile_count;
-
+ 
         if (s->tile_count > 1 && ta) {
             double var = 0.0, mean = (double)s->avg_total_time;
             for (int i = 0; i < s->tile_count; i++) {
@@ -658,45 +667,71 @@ static void calc_group_stats(request_handler_v2_t *self,
     }
     if (ta) free(ta);
 }
-
-static bool is_tile_in_actual_viewport(int tile_id, float yaw, float pitch) {
-    int row = tile_id / NO_OF_COLS;
+ 
+/* ── [FIX-A/B/C]  is_tile_in_actual_viewport ────────────────────────── *
+ *
+ * Canonical ground-truth viewport test.
+ *
+ * Coordinate system: yaw ∈ [0, 360), pitch ∈ [-90, 90].
+ * Tile centre:
+ *   ty = (col + 0.5) * TILE_WIDTH
+ *   tp = -90 + (row + 0.5) * TILE_HEIGHT
+ *
+ * A tile is "in viewport" when the shortest angular distance from the
+ * tile centre to the actual gaze direction is within the half-FOV.
+ *
+ * Shortest circular yaw distance (handles the 0°/360° seam):
+ *   dy_raw = |norm_yaw − ty|
+ *   dy     = (dy_raw > 180) ? 360 − dy_raw : dy_raw
+ *
+ * The comparison uses strict half-extents (45°×45°) so tiles that are
+ * partly inside the FOV but whose CENTRE is outside are counted as
+ * non-viewport — this matches the original intent of the code while
+ * being geometrically correct.
+ */
+static bool is_tile_in_actual_viewport(int tile_id,
+                                       float actual_yaw,
+                                       float actual_pitch)
+{
     int col = tile_id % NO_OF_COLS;
-
-    // Normalize theo system
-    float norm_yaw = wrap_angle_360(yaw);
-    float norm_pitch = clamp_pitch(pitch);
-
-    // Tile center (same system)
+    int row = tile_id / NO_OF_COLS;
+ 
+    /* [FIX-B] Always normalise the incoming gaze direction */
+    float ny = wrap_angle_360(actual_yaw);
+    float np = clamp_pitch(actual_pitch);
+ 
+    /* [FIX-A] Tile centre in the unified [0,360) × [-90,90] system */
     float ty = (col + 0.5f) * TILE_WIDTH;
     float tp = -90.0f + (row + 0.5f) * TILE_HEIGHT;
-
-    float dy = fabsf(norm_yaw - ty);
-    if (dy > 180.0f) dy = 360.0f - dy;
-
-    float dp = fabsf(norm_pitch - tp);
-
-    return (dy <= 45.0f && dp <= 45.0f);
+ 
+    /* [FIX-A] Shortest circular yaw distance */
+    float dy_raw = fabsf(ny - ty);
+    float dy     = (dy_raw > 180.0f) ? (360.0f - dy_raw) : dy_raw;
+ 
+    float dp = fabsf(np - tp);
+ 
+    /* [FIX-C] 90×90° viewport → half-extents of 45° each */
+    return (dy <= VP_HALF_YAW && dp <= VP_HALF_PITCH);
 }
-
-/* ── post_get_info ──────────────────────────────────────────────────────── */
+ 
+/* ── post_get_info ───────────────────────────────────────────────────── */
 RET request_handler_v2_post_get_info(request_handler_v2_t *self,
                                      COUNT                  chunk_id,
                                      int                   *vp_tiles,
                                      int                    num_vp_tiles,
                                      int                   *chosen_versions,
-                                     float                  actual_yaw,   
+                                     float                  actual_yaw,
                                      float                  actual_pitch,
                                      HTTP_VERSION           protocol)
 {
     if (!self || !self->pool) return RET_FAIL;
-
+ 
     const char *pname = (protocol == STREAM_HTTP_2_0) ? "HTTP/2" :
                         (protocol == STREAM_HTTP_3_0) ? "HTTP/3" : "HTTP/1.1";
-
+ 
     printf("\n========== SEGMENT %llu (%s) ==========\n",
            chunk_id + 1, pname);
-
+ 
     /* build non-VP list */
     int non_vp[NO_OF_ROWS * NO_OF_COLS], nvc = 0;
     for (COUNT tid = 0; tid < self->tile_count; tid++) {
@@ -705,35 +740,34 @@ RET request_handler_v2_post_get_info(request_handler_v2_t *self,
             if (vp_tiles[i] == (int)tid) { isvp = true; break; }
         if (!isvp) non_vp[nvc++] = (int)tid;
     }
-
+ 
     int total_jobs = num_vp_tiles + nvc;
-    download_task_t *jobs  = (download_task_t *)calloc(total_jobs, sizeof(*jobs));
-    char           **urls  = (char **)calloc(total_jobs, sizeof(char *));
+    download_task_t *jobs = (download_task_t *)calloc(total_jobs, sizeof(*jobs));
+    char           **urls = (char **)calloc(total_jobs, sizeof(char *));
     if (!jobs || !urls) { free(jobs); free(urls); return RET_FAIL; }
-
+ 
     char ubuf[512];
-
+ 
     /* viewport tiles */
     for (int i = 0; i < num_vp_tiles; i++) {
-        int  tid = vp_tiles[i];
-        int  ver = (self->cts_out)
-                       ? self->cts_out->tiles[tid].chosen_version
-                       : (chosen_versions ? chosen_versions[i] : 0);
-        int  qp  = tile_version_to_num(ver);
-
+        int tid = vp_tiles[i];
+        int ver = (self->cts_out)
+                      ? self->cts_out->tiles[tid].chosen_version
+                      : (chosen_versions ? chosen_versions[i] : 0);
+        int qp  = tile_version_to_num(ver);
+ 
         snprintf(ubuf, sizeof(ubuf),
                  "%s/Class3_RollerCoaster/Class3_RollerCoaster_%llu"
                  "/erp_8x6/tile_yuv/tile_%d_%d_480x341.333333333333_QP%d.bin",
                  self->ser_addr, chunk_id + 1,
                  tid / NO_OF_COLS, tid % NO_OF_COLS, qp);
-
-        urls[i]       = strdup(ubuf);
-        jobs[i].url   = urls[i];
-        jobs[i].tile_id = tid;
-        jobs[i].status  = RET_FAIL;
-        /* wire probability pointer for early termination */
+ 
+        urls[i]          = strdup(ubuf);
+        jobs[i].url      = urls[i];
+        jobs[i].tile_id  = tid;
+        jobs[i].status   = RET_FAIL;
         jobs[i].prob_ptr = (self->p_map) ? &self->p_map[tid] : NULL;
-
+ 
         jobs[i].data              = &self->data[tid];
         jobs[i].dls               = &self->dls[tid];
         jobs[i].cnnt              = &self->cnnt[tid];
@@ -748,7 +782,7 @@ RET request_handler_v2_post_get_info(request_handler_v2_t *self,
         jobs[i].redirect_count    = &self->redirect_count[tid];
         jobs[i].connection_reused = &self->connection_reused[tid];
     }
-
+ 
     /* non-viewport tiles */
     for (int i = 0; i < nvc; i++) {
         int tid = non_vp[i];
@@ -756,19 +790,19 @@ RET request_handler_v2_post_get_info(request_handler_v2_t *self,
         int ver = (self->cts_out)
                       ? self->cts_out->tiles[tid].chosen_version : 0;
         int qp  = tile_version_to_num(ver);
-
+ 
         snprintf(ubuf, sizeof(ubuf),
                  "%s/Class3_RollerCoaster/Class3_RollerCoaster_%llu"
                  "/erp_8x6/tile_yuv/tile_%d_%d_480x341.333333333333_QP%d.bin",
                  self->ser_addr, chunk_id + 1,
                  tid / NO_OF_COLS, tid % NO_OF_COLS, qp);
-
+ 
         urls[ji]        = strdup(ubuf);
         jobs[ji].url    = urls[ji];
         jobs[ji].tile_id = tid;
         jobs[ji].status  = RET_FAIL;
         jobs[ji].prob_ptr = (self->p_map) ? &self->p_map[tid] : NULL;
-
+ 
         jobs[ji].data              = &self->data[tid];
         jobs[ji].dls               = &self->dls[tid];
         jobs[ji].cnnt              = &self->cnnt[tid];
@@ -783,10 +817,10 @@ RET request_handler_v2_post_get_info(request_handler_v2_t *self,
         jobs[ji].redirect_count    = &self->redirect_count[tid];
         jobs[ji].connection_reused = &self->connection_reused[tid];
     }
-
+ 
     printf("[POOL] %d VP + %d non-VP tiles (tau=%.3f)\n",
            num_vp_tiles, nvc, self->pool->early_term_tau);
-
+ 
     if (http_pool_get_parallel(self->pool, jobs, total_jobs,
                                self->max_parallel_downloads) != RET_SUCCESS) {
         fprintf(stderr, "[rh_v2] download failed\n");
@@ -794,33 +828,31 @@ RET request_handler_v2_post_get_info(request_handler_v2_t *self,
         free(urls); free(jobs);
         return RET_FAIL;
     }
-
+ 
     /* count early-terminated tiles */
     int et = 0;
     for (int i = 0; i < total_jobs; i++) {
         if (jobs[i].status == RET_EARLY_TERMINATED) {
             et++;
-            if (self->cts_out) {
-                /* mark in scheduler output (cast away const — it's our own struct) */
+            if (self->cts_out)
                 ((cts_tile_t *)&self->cts_out->tiles[jobs[i].tile_id])
                     ->early_terminated = 1;
-            }
         }
     }
     self->early_term_count += et;
     if (et) printf("[ET] %d tile(s) early-terminated this segment "
                    "(total=%d)\n", et, self->early_term_count);
-
+ 
     /* statistics */
     tile_group_stats_t vp_s, nv_s;
     calc_group_stats(self, vp_tiles, num_vp_tiles, &vp_s);
     calc_group_stats(self, non_vp,   nvc,          &nv_s);
-
-    int64_t total_bytes = (int64_t)vp_s.total_size + (int64_t)nv_s.total_size;
-    count_time_t total_us = vp_s.total_time + nv_s.total_time;
-    int all_tiles  = vp_s.tile_count + nv_s.tile_count;
-    int all_reused = vp_s.num_connections_reused + nv_s.num_connections_reused;
-
+ 
+    int64_t      total_bytes = (int64_t)vp_s.total_size + (int64_t)nv_s.total_size;
+    count_time_t total_us    = vp_s.total_time + nv_s.total_time;
+    int          all_tiles   = vp_s.tile_count + nv_s.tile_count;
+    int          all_reused  = vp_s.num_connections_reused + nv_s.num_connections_reused;
+ 
     printf("[SEG %llu] Proto=%s Tiles=%d(VP:%d NV:%d ET:%d) "
            "Size=%.2fMB Time=%.2fms Tput=%.2fMbps Reuse=%.1f%%\n",
            chunk_id + 1, pname,
@@ -830,42 +862,37 @@ RET request_handler_v2_post_get_info(request_handler_v2_t *self,
            (total_us > 0) ? (total_bytes * 8.0 / (total_us / 1e6) / 1e6) : 0.0,
            (all_tiles > 0) ? (all_reused * 100.0 / all_tiles) : 0.0);
     printf("====================================\n\n");
-
-    /* ── MỚI: Tính toán Wasted Ratio và QoE Drop Rate ── */
-    long long total_bytes_downloaded = 0;
-    long long wasted_bytes = 0;
-    int actual_vp_tiles_count = 0;
-    int qoe_dropped_tiles = 0;
-
-    for (int i = 0; i < self->tile_count; i++) {
-        bool in_actual_vp = is_tile_in_actual_viewport(i, actual_yaw, actual_pitch);
-        if (in_actual_vp) actual_vp_tiles_count++;
-
-        // 1. Wasted Ratio: Đã tải xong nhưng không nằm trong thực tế
+ 
+    /* ── Wasted Ratio and QoE Drop Rate ─────────────────────────────── *
+     *
+     * Wasted bytes: downloaded but centre NOT in actual 90×90° viewport.
+     * QoE drop: tile centre IS in viewport AND was early-terminated.
+     *
+     * Both use the fixed is_tile_in_actual_viewport() with normalised
+     * coords and correct circular-distance yaw check.
+     */
+    long long total_dl = 0, wasted = 0;
+    int       actual_vp_count = 0, qoe_dropped = 0;
+ 
+    for (int i = 0; i < (int)self->tile_count; i++) {
+        bool in_vp = is_tile_in_actual_viewport(i, actual_yaw, actual_pitch);
+        if (in_vp) actual_vp_count++;
+ 
         if (self->size_dl[i] > 0) {
-            total_bytes_downloaded += self->size_dl[i];
-            if (!in_actual_vp) {
-                wasted_bytes += self->size_dl[i];
-            }
+            total_dl += self->size_dl[i];
+            if (!in_vp) wasted += self->size_dl[i];
         }
-
-        // 2. QoE Drop: Tile thực tế bị hủy (Early Terminated)
-        if (in_actual_vp) {
-            // Kiểm tra trạng thái Early Terminated đã được đánh dấu trước đó
-            if (self->cts_out && self->cts_out->tiles[i].early_terminated) {
-                qoe_dropped_tiles++;
-            }
-        }
+ 
+        if (in_vp && self->cts_out && self->cts_out->tiles[i].early_terminated)
+            qoe_dropped++;
     }
-
-    float wasted_ratio = (total_bytes_downloaded > 0) ? 
-                         ((float)wasted_bytes / total_bytes_downloaded) : 0;
-    float qoe_drop_rate = (actual_vp_tiles_count > 0) ? 
-                          ((float)qoe_dropped_tiles / actual_vp_tiles_count) : 0;
-
-    printf("[METRICS] Wasted Ratio: %.2f%% | QoE Drop Rate: %.2f%%\n", 
+ 
+    float wasted_ratio  = (total_dl > 0)           ? ((float)wasted   / total_dl)          : 0.0f;
+    float qoe_drop_rate = (actual_vp_count > 0)    ? ((float)qoe_dropped / actual_vp_count) : 0.0f;
+ 
+    printf("[METRICS] Wasted Ratio: %.2f%% | QoE Drop Rate: %.2f%%\n",
            wasted_ratio * 100.0f, qoe_drop_rate * 100.0f);
-
+ 
     /* CSV */
     FILE *csv = fopen("http_metrics_v2.csv", "a");
     if (csv) {
@@ -885,18 +912,18 @@ RET request_handler_v2_post_get_info(request_handler_v2_t *self,
                 nv_s.avg_download_speed/1e6,
                 nv_s.total_time/1000.0, nv_s.jitter_ms,
                 (nv_s.tile_count>0) ? (nv_s.num_connections_reused*100.0/nv_s.tile_count) : 0.0);
-        fprintf(csv, "%llu,%s,summary,%.4f,%.4f\n", 
-                chunk_id + 1, pname, wasted_ratio, qoe_drop_rate);
+        fprintf(csv, "%llu,%s,summary,%.4f,%.4f\n",
+                chunk_id+1, pname, wasted_ratio, qoe_drop_rate);
         fclose(csv);
     }
-
+ 
     for (int i = 0; i < total_jobs; i++) free(urls[i]);
     free(urls);
     free(jobs);
     return RET_SUCCESS;
 }
-
-/* ── reset ──────────────────────────────────────────────────────────────── */
+ 
+/* ── reset ───────────────────────────────────────────────────────────── */
 RET request_handler_v2_reset(request_handler_v2_t *self)
 {
     if (!self) return RET_FAIL;
@@ -915,8 +942,8 @@ RET request_handler_v2_reset(request_handler_v2_t *self)
     self->cts_out = NULL;
     return RET_SUCCESS;
 }
-
-/* ── destroy ────────────────────────────────────────────────────────────── */
+ 
+/* ── destroy ─────────────────────────────────────────────────────────── */
 RET request_handler_v2_destroy(request_handler_v2_t *self)
 {
     if (!self) return RET_FAIL;
@@ -936,7 +963,7 @@ RET request_handler_v2_destroy(request_handler_v2_t *self)
     memset(self, 0, sizeof(*self));
     return RET_SUCCESS;
 }
-
+ 
 int tile_version_to_num(int version)
 {
     switch (version) {

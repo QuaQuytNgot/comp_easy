@@ -28,123 +28,107 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-
+ 
 #include "proto_comp/define.h"
 #include "proto_comp/abr.h"
 #include "proto_comp/viewport_prediction.h"
 #include "proto_comp/request_handler_v2.h"
 #include "proto_comp/cts_scheduler.h"
 #include "proto_comp/resource_monitor.h"
-
+ 
 /* ── configuration ──────────────────────────────────────────────────────── */
-#define SERVER_ADDR        "https://192.168.101.17:8443"
-#define TOTAL_SEGMENTS     10
-#define VP_HISTORY_SZ      20
-#define PROTOCOL           STREAM_HTTP_3_0
-#define TAU_EARLY_TERM     0.10f   /* early-term threshold τ (0=disable)    */
-#define RHO_SYS_WARN       0.60f   /* print warning above this CPU pressure */
-
-/* Select active algorithm: SCHEDULER_GREEDY | SCHEDULER_RA_MPC | SCHEDULER_SLR */
-#define ACTIVE_ALGORITHM   SCHEDULER_SLR
-
+#define SERVER_ADDR            "https://192.168.101.17:8443"
+#define TOTAL_SEGMENTS         10
+#define VP_HISTORY_SZ          20
+#define PROTOCOL               STREAM_HTTP_3_0
+#define TAU_EARLY_TERM         0.10f
+#define RHO_SYS_WARN           0.60f
+ 
+/* Half-extents of the viewport [degrees].  Viewport is 90×90°. */
+#define VP_HALF_YAW            (VIEWPORT_WIDTH_DEGREES  / 2.0f)   /* 45° */
+#define VP_HALF_PITCH          (VIEWPORT_HEIGHT_DEGREES / 2.0f)   /* 45° */
+ 
+/* Saccade detection: if angular speed exceeds this (°/s) tau is zeroed. */
+#define SACCADE_THRESHOLD_DEG_S  30.0f
+ 
+/* Select active algorithm */
+#define ACTIVE_ALGORITHM        SCHEDULER_SLR
+ 
 typedef struct {
     float yaw;
     float pitch;
     int   timestamp;
 } ViewportSample;
-
+ 
 ViewportSample viewport_dataset[] = {
-    {0.0f, 0.0f, 0},
-    {5.0f, 2.0f, 1000},
-    {10.0f, 3.0f, 2000},
-    {15.0f, 5.0f, 3000},
-    {20.0f, 7.0f, 4000},
-    {5.0f, 2.0f, 1000},
-    {10.0f, 3.0f, 2000},
-    {15.0f, 5.0f, 3000},
-    {20.0f, 7.0f, 4000},
-    {5.0f, 2.0f, 1000},
-    {10.0f, 3.0f, 2000},
-    {15.0f, 5.0f, 3000},
-    {20.0f, 7.0f, 4000},
-    {5.0f, 2.0f, 1000},
-    {10.0f, 3.0f, 2000},
-    {15.0f, 5.0f, 3000},
-    {20.0f, 7.0f, 4000},
-    {5.0f, 2.0f, 1000},
-    {10.0f, 3.0f, 2000},
-    {15.0f, 5.0f, 3000},
-    {20.0f, 7.0f, 4000},
-    {5.0f, 2.0f, 1000},
-    {10.0f, 3.0f, 2000},
-    {15.0f, 5.0f, 3000},
-    {20.0f, 7.0f, 4000},
-    {5.0f, 2.0f, 1000},
-    {10.0f, 3.0f, 2000},
-    {15.0f, 5.0f, 3000},
-    {20.0f, 7.0f, 4000},
-    {5.0f, 2.0f, 1000},
-    {10.0f, 3.0f, 2000},
-    {15.0f, 5.0f, 3000},
-    {20.0f, 7.0f, 4000},
-    {5.0f, 2.0f, 1000},
-    {10.0f, 3.0f, 2000},
-    {15.0f, 5.0f, 3000},
-    {20.0f, 7.0f, 4000}
-    // Add more samples...
+    {180.0f,  0.0f,  0},
+    {180.0f,  0.0f,  1000}, {180.0f, 0.0f, 2000}, {180.0f, 0.0f, 3000}, {180.0f, 0.0f, 4000},
+    {210.0f,  5.0f,  5000},
+    {270.0f, 15.0f,  6000},   /* sudden saccade — 60° in 1 s */
+    {280.0f, 10.0f,  7000},
+    {280.0f, 10.0f,  8000},
+    {280.0f, 10.0f,  9000},
 };
-
-/* ── probability map (Gaussian viewport model) ──────────────────────────── */
-// static void build_pmap(float yaw, float pitch, float *p, int n)
-// {
-//     const float sigma = VIEWPORT_WIDTH_DEGREES / 2.0f;
-//     const float two_s2 = 2.0f * sigma * sigma;
-//     for (int i = 0; i < n; i++) {
-//         int   row = i / NO_OF_COLS, col = i % NO_OF_COLS;
-//         float ty  = (col + 0.5f) * TILE_WIDTH  - 180.0f;
-//         float tp  = (row + 0.5f) * TILE_HEIGHT -  90.0f;
-//         float dy  = yaw - ty;
-//         if (dy >  180.0f) dy -= 360.0f;
-//         if (dy < -180.0f) dy += 360.0f;
-//         float dp  = pitch - tp;
-//         float pi  = expf(-(dy*dy + dp*dp) / two_s2);
-//         p[i] = (pi > 1.0f) ? 1.0f : (pi < 0.0f) ? 0.0f : pi;
-//     }
-// }
-
-// Thêm tham số sigma vào hàm
-static void build_pmap_adaptive(float yaw, float pitch, float *p, int n, float sigma) {
+ 
+/* ── [FIX-1 + FIX-2]  Top-Hat Gaussian probability map ─────────────────── *
+ *
+ * Model:
+ *   p = 1.0                          if  dy ≤ VP_HALF_YAW  &&  dp ≤ VP_HALF_PITCH
+ *   p = exp(-(excess²) / two_s2)    otherwise,
+ *         where excess = distance from tile centre to the nearest viewport edge
+ *
+ * Tile centre coordinates (unified [0,360) / [-90,90]):
+ *   ty = (col + 0.5) * TILE_WIDTH           — always in [0, 360)
+ *   tp = -90 + (row + 0.5) * TILE_HEIGHT    — always in [-90, 90]
+ *
+ * Shortest circular yaw distance:
+ *   dy_raw = |norm_yaw - ty|
+ *   dy     = (dy_raw > 180) ? 360 - dy_raw : dy_raw
+ */
+static void build_pmap_adaptive(float yaw, float pitch,
+                                float *p,  int   n,
+                                float sigma)
+{
     const float two_s2 = 2.0f * sigma * sigma;
-
-    // Normalize theo system chuẩn
-    float norm_yaw = wrap_angle_360(yaw);
-    float norm_pitch = clamp_pitch(pitch);
-
+ 
+    /* Normalise predicted direction — same coordinate system as tile centres */
+    float ny = wrap_angle_360(yaw);
+    float np = clamp_pitch(pitch);
+ 
     for (int i = 0; i < n; i++) {
         int col = i % NO_OF_COLS;
         int row = i / NO_OF_COLS;
-
-        // TILE CENTER theo hệ [0,360]
-        float ty = (col + 0.5f) * TILE_WIDTH;         // [0,360]
+ 
+        /* [FIX-2] Tile centre in [0,360) × [-90,90] */
+        float ty = (col + 0.5f) * TILE_WIDTH;
         float tp = -90.0f + (row + 0.5f) * TILE_HEIGHT;
-
-        // circular distance yaw
-        float dy = fabsf(norm_yaw - ty);
-        if (dy > 180.0f) dy = 360.0f - dy;
-
-        float dp = fabsf(norm_pitch - tp);
-
-        p[i] = expf(-(dy*dy + dp*dp) / two_s2);
+ 
+        /* [FIX-2] Shortest circular yaw distance */
+        float dy_raw = fabsf(ny - ty);
+        float dy     = (dy_raw > 180.0f) ? (360.0f - dy_raw) : dy_raw;
+        float dp     = fabsf(np - tp);
+ 
+        /* [FIX-1] Top-Hat: tiles inside FOV get p = 1.0 */
+        if (dy <= VP_HALF_YAW && dp <= VP_HALF_PITCH) {
+            p[i] = 1.0f;
+        } else {
+            /* Gaussian decay measured from the viewport EDGE, not the centre.
+             * This makes the falloff start at the border, not the centre,
+             * so near-edge tiles stay close to 1.0 rather than ~0.6.       */
+            float excess_y = (dy > VP_HALF_YAW)  ? (dy - VP_HALF_YAW)  : 0.0f;
+            float excess_p = (dp > VP_HALF_PITCH) ? (dp - VP_HALF_PITCH) : 0.0f;
+            p[i] = expf(-(excess_y * excess_y + excess_p * excess_p) / two_s2);
+        }
     }
 }
-
+ 
 static int build_vp_list(const float *p, int n, int *vp, float thr)
 {
     int k = 0;
     for (int i = 0; i < n; i++) if (p[i] >= thr) vp[k++] = i;
     return k;
 }
-
+ 
 /* ── harmonic bandwidth estimator ──────────────────────────────────────── */
 #define BW_HIST 3
 static float harmonic_bw(float *h, int n)
@@ -153,25 +137,25 @@ static float harmonic_bw(float *h, int n)
     for (int i = 0; i < n; i++) if (h[i] > 0.0f) { s += 1.0f / h[i]; c++; }
     return (s > 0.0f && c > 0) ? ((float)c / s) : 1e6f;
 }
-
-/* ── main ────────────────────────────────────────────────────────────────── */
+ 
+/* ── main ───────────────────────────────────────────────────────────────── */
 int main(void)
 {
     const char *algo_name =
         (ACTIVE_ALGORITHM == SCHEDULER_RA_MPC) ? "RA-MPC" :
         (ACTIVE_ALGORITHM == SCHEDULER_SLR)    ? "SLR"    : "GREEDY";
-
+ 
     printf("=== CTS Streaming Demo  Algorithm: %s ===\n\n", algo_name);
-
-    /* ── 1. Resource monitor ──────────────────────────────────────────── */
+ 
+    /* 1. Resource monitor */
     resource_monitor_t rm;
     if (resource_monitor_init(&rm) != RET_SUCCESS) {
         fprintf(stderr, "[main] resource_monitor_init failed\n");
         return EXIT_FAILURE;
     }
     printf("[INIT] Resource monitor OK\n");
-
-    /* ── 2. Viewport predictor (LEGR) ────────────────────────────────── */
+ 
+    /* 2. Viewport predictor (LEGR) */
     float yaw_h[VP_HISTORY_SZ], pit_h[VP_HISTORY_SZ];
     int   ts[VP_HISTORY_SZ];
     for (int i = 0; i < VP_HISTORY_SZ; i++) {
@@ -185,8 +169,8 @@ int main(void)
         return EXIT_FAILURE;
     }
     printf("[INIT] Viewport predictor OK\n");
-
-    /* ── 3. Request handler ──────────────────────────────────────────── */
+ 
+    /* 3. Request handler */
     int tile_count = NO_OF_ROWS * NO_OF_COLS;
     request_handler_v2_t rh;
     if (request_handler_v2_init(&rh, SERVER_ADDR, TOTAL_SEGMENTS,
@@ -197,91 +181,117 @@ int main(void)
     }
     rh.pool->early_term_tau = TAU_EARLY_TERM;
     printf("[INIT] Request handler OK (tau=%.2f)\n", TAU_EARLY_TERM);
-
-    /* ── 4. Scheduler structures ─────────────────────────────────────── */
+ 
+    /* 4. Scheduler structures */
     cts_tile_t  *tiles = (cts_tile_t *)calloc(tile_count, sizeof(cts_tile_t));
     if (!tiles) { request_handler_v2_destroy(&rh); return EXIT_FAILURE; }
-
+ 
     cts_output_t sched_out = { .tiles = tiles, .tile_count = tile_count };
     slr_state_t  slr_state;
     slr_state_init(&slr_state);
-
+ 
     float p_map[NO_OF_ROWS * NO_OF_COLS];
     int   vp_tiles[NO_OF_ROWS * NO_OF_COLS];
     float bw_hist[BW_HIST] = { 1e6f, 1e6f, 1e6f };
     int   bw_idx   = 0;
     float buf_level = MAX_BUFFER_SIZE / 2.0f;
     int   last_q    = 0;
-
+ 
+    /* Track previous predicted yaw for velocity estimation */
+    float prev_pred_yaw = 180.0f;
+    int   prev_ts_ms    = 0;
+ 
     printf("[INIT] Ready.  Starting %d segments.\n\n", TOTAL_SEGMENTS);
-
+ 
     /* ════════════════════════════════════════════════════════════════════
      * SEGMENT LOOP
      * ════════════════════════════════════════════════════════════════════ */
     for (COUNT seg = 0; seg < TOTAL_SEGMENTS; seg++) {
         printf("━━━━━━  SEG %llu  buf=%.2fs  ━━━━━━\n", seg+1, buf_level);
-
-        int data_idx = (seg < (sizeof(viewport_dataset)/sizeof(ViewportSample))) ? seg : 0;
+ 
+        int data_idx = (seg < (sizeof(viewport_dataset)/sizeof(ViewportSample)))
+                       ? (int)seg : 0;
         float actual_yaw   = viewport_dataset[data_idx].yaw;
         float actual_pitch = viewport_dataset[data_idx].pitch;
-
+        int   actual_ts_ms = viewport_dataset[data_idx].timestamp;
+ 
         /* Step A: system resource sample */
         resource_monitor_update(&rm);
-        float rho  = get_system_status(&rm);
+        float rho   = get_system_status(&rm);
         float cproc = resource_monitor_get_cproc(&rm);
         printf("[RM] rho_sys=%.4f  C_proc=%.1f%s\n",
                rho, cproc, (rho > RHO_SYS_WARN) ? "  [HIGH]" : "");
-
+ 
         /* Step B: viewport prediction */
         float pred_yaw = 180.0f, pred_pit = 0.0f;
         if (vpes.vpes_post(&vpes, &pred_yaw, &pred_pit) == RET_SUCCESS)
-            printf("[VP] yaw=%.1f°  pitch=%.1f°\n", pred_yaw, pred_pit);
+            printf("[VP] pred yaw=%.1f°  pitch=%.1f°\n", pred_yaw, pred_pit);
         else
             printf("[VP] prediction failed — using last centre\n");
-
-        /* Step C: probability map + VP tile list */
-        /* ── MỚI: TÍNH TOÁN ADAPTIVE SIGMA & TAU (Hybrid Method) ── */
-        
-        // 1. Tính vận tốc để xác định Sigma
-        float velocity = fabsf(pred_yaw - yaw_h[(vpes.current_index - 1 + VP_HISTORY_SZ) % VP_HISTORY_SZ]);
-        float adaptive_sigma = (velocity > 20.0f) ? (VIEWPORT_WIDTH_DEGREES * 0.5f) : (VIEWPORT_WIDTH_DEGREES * 0.3f);;
-
-        // 2. Tính sai số dự đoán hiện tại
-        float diff_y = fabsf(pred_yaw - actual_yaw);
-        if (diff_y > 180.0f) diff_y = 360.0f - diff_y;
-        float diff_p = fabsf(pred_pit - actual_pitch);
-        float prediction_error = sqrtf(diff_y * diff_y + diff_p * diff_p);
-
-        // 3. Tính Hybrid Tau (Kết hợp Phương pháp 2 & 3)
-        float tau_base = 0.15f * expf(-(prediction_error * prediction_error) / (2.0f * adaptive_sigma * adaptive_sigma));
-        float resource_penalty = 1.0f + (0.05f * slr_state.mu);
-        float tau_final = tau_base * resource_penalty;
-        
-        // Clamping an toàn
+ 
+        /* ── [FIX-3] Adaptive sigma & tau (saccade-safe) ─────────────── */
+ 
+        /* Angular velocity of the predicted trajectory [°/s].
+         * Use the shortest circular distance to handle wrap-around. */
+        float dt_s = (actual_ts_ms > prev_ts_ms)
+                     ? (actual_ts_ms - prev_ts_ms) / 1000.0f
+                     : 1.0f;
+        float d_yaw_raw = fabsf(pred_yaw - prev_pred_yaw);
+        float d_yaw     = (d_yaw_raw > 180.0f) ? (360.0f - d_yaw_raw) : d_yaw_raw;
+        float velocity  = d_yaw / dt_s;           /* °/s */
+ 
+        /* Widen sigma during fast motion */
+        float adaptive_sigma = (velocity > 20.0f)
+                               ? (VIEWPORT_WIDTH_DEGREES * 0.5f)   /* 45° */
+                               : (VIEWPORT_WIDTH_DEGREES * 0.3f);  /* 27° */
+ 
+        /* Prediction error for tau base */
+        float diff_y_raw = fabsf(pred_yaw - actual_yaw);
+        float diff_y     = (diff_y_raw > 180.0f) ? (360.0f - diff_y_raw) : diff_y_raw;
+        float diff_p     = fabsf(pred_pit - actual_pitch);
+        float pred_err   = sqrtf(diff_y * diff_y + diff_p * diff_p);
+ 
+        float tau_base    = 0.15f * expf(-(pred_err * pred_err)
+                                          / (2.0f * adaptive_sigma * adaptive_sigma));
+        float tau_resource = 1.0f + 0.05f * slr_state.mu;
+        float tau_final    = tau_base * tau_resource;
+ 
+        /* Clamp to safe range */
         if (tau_final < 0.02f) tau_final = 0.02f;
         if (tau_final > 0.15f) tau_final = 0.15f;
-        
-        float tau_finals;
-        if (seg < 4) tau_finals = 0.0f;
-        else tau_finals = tau_final; 
-        // Cập nhật Tau vào Pool ngay trước khi tải
-        rh.pool->early_term_tau = 0.01f;
-
+ 
+        /* [FIX-3] SACCADE GUARD — zero tau during rapid head rotation.
+         * This is the key fix for QoE drops: when velocity exceeds the
+         * threshold we cannot trust the prediction, so we must NOT terminate
+         * any tile.  tau = 0 disables early termination entirely.           */
+        if (velocity > SACCADE_THRESHOLD_DEG_S) {
+            tau_final = 0.0f;
+            printf("[TAU] Saccade detected (%.1f °/s) — tau forced to 0\n", velocity);
+        }
+ 
+        /* Warm-up: disable ET for first 4 segments (predictor has no history) */
+        if (seg < 4) tau_final = 0.0f;
+ 
+        /* [FIX-4] Apply tau — NOT overridden by a stray hardcoded value */
+        rh.pool->early_term_tau = tau_final;
+        printf("[TAU] velocity=%.1f°/s  sigma=%.1f°  tau=%.3f\n",
+               velocity, adaptive_sigma, tau_final);
+ 
+        /* Step C: probability map + VP tile list */
         build_pmap_adaptive(pred_yaw, pred_pit, p_map, tile_count, adaptive_sigma);
-
         request_handler_v2_update_pmap(&rh, p_map);
-        int nvp = build_vp_list(p_map, tile_count, vp_tiles, 0.5f);
-        printf("[PM] %d viewport tiles\n", nvp);
-
+        int nvp = build_vp_list(p_map, tile_count, vp_tiles, 0.15f);
+        printf("[PM] %d viewport tiles (threshold 0.15)\n", nvp);
+ 
         /* Step D: bandwidth estimate */
         float bw = harmonic_bw(bw_hist, BW_HIST);
         printf("[BW] %.2f Mbps\n", bw * 8.0f / 1e6f);
-
-        /* Step E: CTS scheduling ─────────────────────────────────────── */
-        /* λ or λ1 is also modulated by buffer pressure */
+ 
+        /* Step E: CTS scheduling */
         float buf_pressure = (buf_level < B_HIGH)
-                                 ? (1.0f - buf_level / B_HIGH) : 0.0f;
-
+                             ? (1.0f - buf_level / B_HIGH) : 0.0f;
+        (void)buf_pressure;   /* used by RA-MPC internally */
+ 
         cts_input_t cin;
         cts_input_init(&cin);
         cin.p_map         = p_map;
@@ -292,53 +302,39 @@ int main(void)
         cin.rho_sys       = rho;
         cin.c_proc_global = cproc;
         cin.last_quality  = last_q;
-
-        /* SLR: when CPU load is high, CTS step 4 says reduce batch size.
-         * We signal this by lowering early_term_tau temporarily. */
-        // if (ACTIVE_ALGORITHM == SCHEDULER_SLR && rho > RHO_SYS_WARN)
-        //     rh.pool->early_term_tau = TAU_EARLY_TERM * 2.0f;
-        // else
-        //     rh.pool->early_term_tau = TAU_EARLY_TERM;
-
+ 
         memset(&sched_out, 0, sizeof(sched_out));
         sched_out.tiles      = tiles;
         sched_out.tile_count = tile_count;
-
+ 
         if (cts_schedule(ACTIVE_ALGORITHM, &cin, &sched_out,
-                         (ACTIVE_ALGORITHM == SCHEDULER_SLR) ? &slr_state
-                                                              : NULL)
+                         (ACTIVE_ALGORITHM == SCHEDULER_SLR) ? &slr_state : NULL)
             != RET_SUCCESS) {
             fprintf(stderr, "[main] cts_schedule failed\n");
             break;
         }
-
+ 
         printf("[%s] J=%.2f  BW=%.2f Mbps  CPU=%.3f  VP_avg=%.0f bps\n",
-               algo_name,
-               sched_out.objective_value,
+               algo_name, sched_out.objective_value,
                sched_out.total_bw_used * 8.0f / 1e6f,
                sched_out.total_cpu_load,
                sched_out.vp_avg_quality);
-
+ 
         if (ACTIVE_ALGORITHM == SCHEDULER_SLR)
             printf("[SLR] λ=%.3f  μ=%.3f  γ=%.3f\n",
                    slr_state.lambda, slr_state.mu, slr_state.gamma);
-
-        /* Record last chosen quality for smoothness penalty in next seg */
+ 
         if (nvp > 0) last_q = sched_out.tiles[vp_tiles[0]].chosen_version;
-
+ 
         /* Step F: parallel download with early termination */
         rh.cts_out = &sched_out;
-        if (request_handler_v2_post_get_info(&rh, 
-                                             seg, 
-                                             vp_tiles, 
-                                             nvp, 
+        if (request_handler_v2_post_get_info(&rh, seg, vp_tiles, nvp,
                                              NULL,
-                                             actual_yaw, 
-                                             actual_pitch, 
+                                             actual_yaw, actual_pitch,
                                              PROTOCOL) != RET_SUCCESS)
             fprintf(stderr, "[main] download seg %llu failed\n", seg+1);
-
-        /* Step G: update bandwidth history from measured download speed */
+ 
+        /* Step G: update bandwidth history */
         float tot_bytes = 0.0f, tot_us = 0.0f;
         for (int i = 0; i < nvp; i++) {
             int tid = vp_tiles[i];
@@ -347,28 +343,30 @@ int main(void)
         }
         float meas_bw = (tot_us > 0.0f) ? (tot_bytes / (tot_us / 1e6f)) : bw;
         bw_hist[bw_idx++ % BW_HIST] = meas_bw;
-
-        /* Step H: simulate buffer update */
+ 
+        /* Step H: simulate buffer */
         float dl_time = (bw > 0.0f) ? (sched_out.vp_avg_quality * nvp / bw) : 0.5f;
         buf_level = (buf_level >= dl_time) ? (buf_level - dl_time) : 0.0f;
         buf_level += SEGMENT_DURATION;
         if (buf_level > MAX_BUFFER_SIZE) buf_level = MAX_BUFFER_SIZE;
-
-        /* Step I: add simulated HMD sample */
-        // float sim_yaw = fmodf(180.0f + (float)seg * 3.5f, 360.0f);
-        // float sim_pit = fminf((float)seg * 0.8f, 25.0f);
+ 
+        /* Step I: feed HMD sample to predictor */
         add_viewport_sample(&vpes, actual_yaw, actual_pitch);
-
+ 
+        /* Update state for next iteration */
+        prev_pred_yaw = pred_yaw;
+        prev_ts_ms    = actual_ts_ms;
+ 
         request_handler_v2_reset(&rh);
     }
-
-    /* ── shutdown ────────────────────────────────────────────────────────── */
+ 
+    /* shutdown */
     printf("\n=== Session complete  Algorithm: %s ===\n", algo_name);
     printf("  Total early-terminated tiles : %d\n", rh.early_term_count);
     if (ACTIVE_ALGORITHM == SCHEDULER_SLR)
         printf("  Final SLR multipliers: λ=%.4f  μ=%.4f  γ=%.4f\n",
                slr_state.lambda, slr_state.mu, slr_state.gamma);
-
+ 
     free(tiles);
     request_handler_v2_destroy(&rh);
     return EXIT_SUCCESS;
