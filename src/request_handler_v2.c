@@ -659,15 +659,24 @@ static void calc_group_stats(request_handler_v2_t *self,
     if (ta) free(ta);
 }
 
-static bool is_tile_in_actual_viewport(int tile_id, float actual_yaw, float actual_pitch) {
+static bool is_tile_in_actual_viewport(int tile_id, float yaw, float pitch) {
     int row = tile_id / NO_OF_COLS;
     int col = tile_id % NO_OF_COLS;
-    float ty = (col + 0.5f) * TILE_WIDTH - 180.0f;
-    float tp = (row + 0.5f) * TILE_HEIGHT - 90.0f;
-    float dy = fabsf(actual_yaw - ty);
+
+    // Normalize theo system
+    float norm_yaw = wrap_angle_360(yaw);
+    float norm_pitch = clamp_pitch(pitch);
+
+    // Tile center (same system)
+    float ty = (col + 0.5f) * TILE_WIDTH;
+    float tp = -90.0f + (row + 0.5f) * TILE_HEIGHT;
+
+    float dy = fabsf(norm_yaw - ty);
     if (dy > 180.0f) dy = 360.0f - dy;
-    float dp = fabsf(actual_pitch - tp);
-    return (dy <= 45.0f && dp <= 45.0f); // Giả sử Viewport 100x100 độ
+
+    float dp = fabsf(norm_pitch - tp);
+
+    return (dy <= 45.0f && dp <= 45.0f);
 }
 
 /* ── post_get_info ──────────────────────────────────────────────────────── */

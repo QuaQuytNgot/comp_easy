@@ -113,25 +113,28 @@ ViewportSample viewport_dataset[] = {
 // }
 
 // Thêm tham số sigma vào hàm
-static void build_pmap_adaptive(float yaw, float pitch, float *p, int n, float adaptive_sigma)
-{
-    // Sử dụng adaptive_sigma thay vì hằng số cố định
-    const float two_s2 = 2.0f * adaptive_sigma * adaptive_sigma; 
-    
+static void build_pmap_adaptive(float yaw, float pitch, float *p, int n, float sigma) {
+    const float two_s2 = 2.0f * sigma * sigma;
+
+    // Normalize theo system chuẩn
+    float norm_yaw = wrap_angle_360(yaw);
+    float norm_pitch = clamp_pitch(pitch);
+
     for (int i = 0; i < n; i++) {
-        int   row = i / NO_OF_COLS, col = i % NO_OF_COLS;
-        float ty  = (col + 0.5f) * TILE_WIDTH  - 180.0f;
-        float tp  = (row + 0.5f) * TILE_HEIGHT -  90.0f;
-        
-        float dy  = yaw - ty;
-        if (dy >  180.0f) dy -= 360.0f;
-        if (dy < -180.0f) dy += 360.0f;
-        
-        float dp  = pitch - tp;
-        
-        // Tính xác suất p_i dựa trên adaptive_sigma
-        float pi  = expf(-(dy*dy + dp*dp) / two_s2);
-        p[i] = (pi > 1.0f) ? 1.0f : (pi < 0.0f) ? 0.0f : pi;
+        int col = i % NO_OF_COLS;
+        int row = i / NO_OF_COLS;
+
+        // TILE CENTER theo hệ [0,360]
+        float ty = (col + 0.5f) * TILE_WIDTH;         // [0,360]
+        float tp = -90.0f + (row + 0.5f) * TILE_HEIGHT;
+
+        // circular distance yaw
+        float dy = fabsf(norm_yaw - ty);
+        if (dy > 180.0f) dy = 360.0f - dy;
+
+        float dp = fabsf(norm_pitch - tp);
+
+        p[i] = expf(-(dy*dy + dp*dp) / two_s2);
     }
 }
 
@@ -262,7 +265,7 @@ int main(void)
         if (seg < 4) tau_finals = 0.0f;
         else tau_finals = tau_final; 
         // Cập nhật Tau vào Pool ngay trước khi tải
-        rh.pool->early_term_tau = tau_finals;
+        rh.pool->early_term_tau = 0.01f;
 
         build_pmap_adaptive(pred_yaw, pred_pit, p_map, tile_count, adaptive_sigma);
 
