@@ -237,14 +237,34 @@ int main(void)
             printf("[VP] prediction failed — using last centre\n");
 
         /* Step C: probability map + VP tile list */
-        // build_pmap(pred_yaw, pred_pit, p_map, tile_count);
-        // Giả sử lấy mẫu từ lịch sử dự đoán
+        /* ── MỚI: TÍNH TOÁN ADAPTIVE SIGMA & TAU (Hybrid Method) ── */
+        
+        // 1. Tính vận tốc để xác định Sigma
         float velocity = fabsf(pred_yaw - yaw_h[(vpes.current_index - 1 + VP_HISTORY_SZ) % VP_HISTORY_SZ]);
+        float adaptive_sigma = (velocity > 20.0f) ? (VIEWPORT_WIDTH_DEGREES * 0.5f) : (VIEWPORT_WIDTH_DEGREES * 0.3f);;
 
-        // Nếu quay nhanh (> 20 độ/s), tăng sigma lên 1.5 lần, ngược lại giữ nguyên hoặc thu nhỏ
-        float my_adaptive_sigma = (velocity > 20.0f) ? (VIEWPORT_WIDTH_DEGREES * 0.75f) : (VIEWPORT_WIDTH_DEGREES / 2.0f);
+        // 2. Tính sai số dự đoán hiện tại
+        float diff_y = fabsf(pred_yaw - actual_yaw);
+        if (diff_y > 180.0f) diff_y = 360.0f - diff_y;
+        float diff_p = fabsf(pred_pit - actual_pitch);
+        float prediction_error = sqrtf(diff_y * diff_y + diff_p * diff_p);
 
-        build_pmap_adaptive(pred_yaw, pred_pit, p_map, tile_count, my_adaptive_sigma);
+        // 3. Tính Hybrid Tau (Kết hợp Phương pháp 2 & 3)
+        float tau_base = 0.15f * expf(-(prediction_error * prediction_error) / (2.0f * adaptive_sigma * adaptive_sigma));
+        float resource_penalty = 1.0f + (0.05f * slr_state.mu);
+        float tau_final = tau_base * resource_penalty;
+        
+        // Clamping an toàn
+        if (tau_final < 0.02f) tau_final = 0.02f;
+        if (tau_final > 0.15f) tau_final = 0.15f;
+        
+        float tau_finals;
+        if (seg < 4) tau_finals = 0.0f;
+        else tau_finals = tau_final; 
+        // Cập nhật Tau vào Pool ngay trước khi tải
+        rh.pool->early_term_tau = tau_finals;
+
+        build_pmap_adaptive(pred_yaw, pred_pit, p_map, tile_count, adaptive_sigma);
 
         request_handler_v2_update_pmap(&rh, p_map);
         int nvp = build_vp_list(p_map, tile_count, vp_tiles, 0.5f);
@@ -272,10 +292,10 @@ int main(void)
 
         /* SLR: when CPU load is high, CTS step 4 says reduce batch size.
          * We signal this by lowering early_term_tau temporarily. */
-        if (ACTIVE_ALGORITHM == SCHEDULER_SLR && rho > RHO_SYS_WARN)
-            rh.pool->early_term_tau = TAU_EARLY_TERM * 2.0f;
-        else
-            rh.pool->early_term_tau = TAU_EARLY_TERM;
+        // if (ACTIVE_ALGORITHM == SCHEDULER_SLR && rho > RHO_SYS_WARN)
+        //     rh.pool->early_term_tau = TAU_EARLY_TERM * 2.0f;
+        // else
+        //     rh.pool->early_term_tau = TAU_EARLY_TERM;
 
         memset(&sched_out, 0, sizeof(sched_out));
         sched_out.tiles      = tiles;
