@@ -113,6 +113,7 @@
 #include "http_pool.h"
 #include "cts_scheduler.h"
 #include <math.h>
+#include "resource_monitor.h"
 
 /* tile group statistics — unchanged from original */
 typedef struct
@@ -212,7 +213,8 @@ RET request_handler_v2_post_get_info(request_handler_v2_t *self,
                                      int                   *chosen_versions,
                                      float                  actual_yaw,   
                                      float                  actual_pitch,
-                                     HTTP_VERSION           protocol);
+                                     HTTP_VERSION           protocol,
+                                     resource_monitor_t    *rm);
 
 RET request_handler_v2_reset(request_handler_v2_t *self);
 RET request_handler_v2_destroy(request_handler_v2_t *self);

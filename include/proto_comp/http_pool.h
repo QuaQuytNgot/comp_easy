@@ -57,6 +57,7 @@
 #include "buffer.h"
 #include <curl/curl.h>
 #include "http.h"
+#include "resource_monitor.h"
 
 /* ─────────────────────────────────────────────────────────────────────────
  * Early-termination sentinel written to download_task_t.status when a tile
@@ -116,6 +117,8 @@ typedef struct download_task_t {
 
     /* Live p_i(t) pointer for early termination — NULL disables the check */
     const float  *prob_ptr;
+
+    int           is_dispatched;
 } download_task_t;
 
 /* Initialize connection pool */
@@ -130,5 +133,11 @@ RET http_pool_get_parallel(http_pool_t     *pool,
                            download_task_t *tasks,
                            int              num_tasks,
                            int              max_concurrent);
+
+RET http_pool_get_parallel_dynamic(http_pool_t     *pool,
+                                download_task_t *tasks,
+                                int              num_tasks,
+                                int              max_concurrent,
+                                resource_monitor_t *rm);
 
 #endif /* HTTP_POOL_H */

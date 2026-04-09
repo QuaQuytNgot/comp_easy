@@ -51,8 +51,8 @@
 /* Saccade detection: if angular speed exceeds this (°/s) tau is zeroed. */
 #define SACCADE_THRESHOLD_DEG_S  30.0f
  
-/* Select active algorithm */
-#define ACTIVE_ALGORITHM        SCHEDULER_SLR
+/* Select active algorithm: SCHEDULER_RA_MPC, SCHEDULER_SLR */
+#define ACTIVE_ALGORITHM        SCHEDULER_RA_MPC
  
 typedef struct {
     float yaw;
@@ -60,13 +60,23 @@ typedef struct {
     int   timestamp;
 } ViewportSample;
  
+// ViewportSample viewport_dataset[] = {
+//     {180.0f,  0.0f,  0},
+//     {180.0f,  0.0f,  1000}, {180.0f, 0.0f, 2000}, {180.0f, 0.0f, 3000}, {180.0f, 0.0f, 4000},
+//     {210.0f,  5.0f,  5000},
+//     {270.0f, 15.0f,  6000},   /* sudden saccade — 60° in 1 s */
+//     {280.0f, 10.0f,  7000},
+//     {280.0f, 10.0f,  8000},
+//     {280.0f, 10.0f,  9000},
+// };
+
 ViewportSample viewport_dataset[] = {
     {180.0f,  0.0f,  0},
-    {180.0f,  0.0f,  1000}, {180.0f, 0.0f, 2000}, {180.0f, 0.0f, 3000}, {180.0f, 0.0f, 4000},
+    {192.0f,  3.0f,  1000}, {198.0f, 9.0f, 2000}, {177.0f, 12.0f, 3000}, {180.0f, 13.0f, 4000},
     {210.0f,  5.0f,  5000},
     {270.0f, 15.0f,  6000},   /* sudden saccade — 60° in 1 s */
     {280.0f, 10.0f,  7000},
-    {280.0f, 10.0f,  8000},
+    {210.0f, 10.0f,  8000},
     {280.0f, 10.0f,  9000},
 };
  
@@ -251,14 +261,14 @@ int main(void)
         float diff_p     = fabsf(pred_pit - actual_pitch);
         float pred_err   = sqrtf(diff_y * diff_y + diff_p * diff_p);
  
-        float tau_base    = 0.15f * expf(-(pred_err * pred_err)
+        float tau_base    = expf(-(pred_err * pred_err)
                                           / (2.0f * adaptive_sigma * adaptive_sigma));
-        float tau_resource = 1.0f + 0.05f * slr_state.mu;
+        float tau_resource = 1.0f + 0.05f * slr_state.mu + (0.01f * slr_state.lambda);;
         float tau_final    = tau_base * tau_resource;
  
         /* Clamp to safe range */
         if (tau_final < 0.02f) tau_final = 0.02f;
-        if (tau_final > 0.15f) tau_final = 0.15f;
+        if (tau_final > 0.35f) tau_final = 0.35f;
  
         /* [FIX-3] SACCADE GUARD — zero tau during rapid head rotation.
          * This is the key fix for QoE drops: when velocity exceeds the
@@ -270,7 +280,7 @@ int main(void)
         }
  
         /* Warm-up: disable ET for first 4 segments (predictor has no history) */
-        if (seg < 4) tau_final = 0.0f;
+        if (seg < 3) tau_final = 0.0f;
  
         /* [FIX-4] Apply tau — NOT overridden by a stray hardcoded value */
         rh.pool->early_term_tau = tau_final;
@@ -331,7 +341,7 @@ int main(void)
         if (request_handler_v2_post_get_info(&rh, seg, vp_tiles, nvp,
                                              NULL,
                                              actual_yaw, actual_pitch,
-                                             PROTOCOL) != RET_SUCCESS)
+                                             PROTOCOL, &rm) != RET_SUCCESS)
             fprintf(stderr, "[main] download seg %llu failed\n", seg+1);
  
         /* Step G: update bandwidth history */

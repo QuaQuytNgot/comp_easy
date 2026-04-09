@@ -481,3 +481,174 @@ RET http_pool_get_parallel(http_pool_t     *pool,
     curl_multi_cleanup(multi_handle);
     return RET_SUCCESS;
 }
+
+RET http_pool_get_parallel_dynamic(http_pool_t     *pool,
+                                download_task_t *tasks,
+                                int              num_tasks,
+                                int              max_concurrent,
+                                resource_monitor_t *rm)
+{
+    if (!pool || !pool->is_initialized || !tasks || num_tasks <= 0 || !rm)
+        return RET_FAIL;
+
+    CURLM *multi_handle = curl_multi_init();
+    if (!multi_handle) return RET_FAIL;
+
+    curl_multi_setopt(multi_handle, CURLMOPT_MAXCONNECTS, (long)max_concurrent);
+    curl_multi_setopt(multi_handle, CURLMOPT_PIPELINING, CURLPIPE_MULTIPLEX);
+
+    /* ── Init Curl Handles ── */
+    for (int i = 0; i < num_tasks; i++) {
+        tasks[i].easy_handle = curl_easy_init();
+        if (!tasks[i].easy_handle) return RET_FAIL;
+
+        CURL *eh = tasks[i].easy_handle; 
+
+        buffer_destroy(tasks[i].data);
+        buffer_init(tasks[i].data);
+
+        curl_easy_setopt(eh, CURLOPT_SHARE,          pool->share_handle);
+        curl_easy_setopt(eh, CURLOPT_BUFFERSIZE,      102400L);
+        curl_easy_setopt(eh, CURLOPT_NOPROGRESS,      1L);
+        curl_easy_setopt(eh, CURLOPT_USERAGENT,       "curl/7.91.0");
+        curl_easy_setopt(eh, CURLOPT_MAXREDIRS,       50L);
+        curl_easy_setopt(eh, CURLOPT_WRITEFUNCTION,   write_callback);
+        curl_easy_setopt(eh, CURLOPT_WRITEDATA,      (void *)tasks[i].data);
+        curl_easy_setopt(eh, CURLOPT_URL,            tasks[i].url);
+        
+        curl_easy_setopt(eh, CURLOPT_SSL_VERIFYPEER,  0L);
+        curl_easy_setopt(eh, CURLOPT_SSL_VERIFYHOST,  0L);
+        
+        curl_easy_setopt(eh, CURLOPT_TCP_KEEPALIVE,   1L);
+        curl_easy_setopt(eh, CURLOPT_FTP_SKIP_PASV_IP, 1L);
+        curl_easy_setopt(eh, CURLOPT_PRIVATE,        (void *)(intptr_t)i);
+        
+        if (pool->version == STREAM_HTTP_3_0)
+            curl_easy_setopt(eh, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_3ONLY);
+
+        tasks[i].status = RET_FAIL;
+        tasks[i].is_dispatched = 0; // Đánh dấu chưa gửi vào Multi-stack
+    }
+
+    /* ── Request tiles with high probability first ── */
+    int still_running = 0;
+    int active_bitmap[num_tasks]; // Manage overload status
+    memset(active_bitmap, 0, sizeof(active_bitmap));
+
+    for (int i = 0; i < num_tasks; i++) {
+        float p = (tasks[i].prob_ptr) ? *(tasks[i].prob_ptr) : 0.0f;
+        if (p >= 0.50f) { 
+            curl_multi_add_handle(multi_handle, tasks[i].easy_handle);
+            tasks[i].is_dispatched = 1;
+            active_bitmap[i] = 1;
+            still_running++;
+        }
+    }
+
+    /* ── POLLING with Dynamic Pacing ── */
+    int stage_2_done = 0;
+    do {
+        CURLMcode mc = curl_multi_perform(multi_handle, &still_running);
+
+        /* Check CPU to send Stage 2 */
+        if (!stage_2_done) {
+            resource_monitor_update(rm);
+            float stress = get_system_status(rm); 
+
+            if (stress < 0.20f) { // If CPU load < 20%
+                for (int i = 0; i < num_tasks; i++) {
+                    if (!tasks[i].is_dispatched) {
+                        curl_multi_add_handle(multi_handle, tasks[i].easy_handle);
+                        tasks[i].is_dispatched = 1;
+                        active_bitmap[i] = 1;
+                        still_running++;
+                    }
+                }
+                stage_2_done = 1;
+            }
+        }
+
+        /* Early Termination Logic */
+        if (pool->early_term_tau > 0.0f) {
+            for (int i = 0; i < num_tasks; i++) {
+                if (!active_bitmap[i] || !tasks[i].prob_ptr) continue;
+                if (*(tasks[i].prob_ptr) < pool->early_term_tau) {
+                    curl_multi_remove_handle(multi_handle, tasks[i].easy_handle);
+                    tasks[i].status = RET_EARLY_TERMINATED;
+                    active_bitmap[i] = 0;
+                }
+            }
+        }
+
+        if (still_running) {
+            curl_multi_poll(multi_handle, NULL, 0, 10, NULL);
+        }
+    } while (still_running > 0 || !stage_2_done);
+
+    /* ── BƯỚC 4: Collect data (HARVEST STATS) ── */
+    /* ── harvest completion messages ─────────────────────────────────────── */
+    int msgs_left = 0;
+    CURLMsg *msg  = NULL;
+    while ((msg = curl_multi_info_read(multi_handle, &msgs_left))) {
+        if (msg->msg != CURLMSG_DONE) continue;
+
+        CURL *eh       = msg->easy_handle;
+        long  task_idx = 0;
+        curl_easy_getinfo(eh, CURLINFO_PRIVATE, &task_idx);
+        if (task_idx < 0 || task_idx >= num_tasks) continue;
+
+        curl_easy_getinfo(eh, CURLINFO_NAMELOOKUP_TIME_T,
+                          (curl_off_t *)tasks[task_idx].namelookup_time);
+        curl_easy_getinfo(eh, CURLINFO_CONNECT_TIME_T,
+                          (curl_off_t *)tasks[task_idx].cnnt);
+        curl_easy_getinfo(eh, CURLINFO_APPCONNECT_TIME_T,
+                          (curl_off_t *)tasks[task_idx].appconnect_time);
+        curl_easy_getinfo(eh, CURLINFO_PRETRANSFER_TIME_T,
+                          (curl_off_t *)tasks[task_idx].pre_trans_time);
+        curl_easy_getinfo(eh, CURLINFO_STARTTRANSFER_TIME_T,
+                          (curl_off_t *)tasks[task_idx].start_trans_time);
+        curl_easy_getinfo(eh, CURLINFO_TOTAL_TIME_T,
+                          (curl_off_t *)tasks[task_idx].total_time);
+        curl_easy_getinfo(eh, CURLINFO_SPEED_DOWNLOAD_T,
+                          (curl_off_t *)tasks[task_idx].dls);
+        curl_easy_getinfo(eh, CURLINFO_SIZE_DOWNLOAD_T,
+                          (curl_off_t *)tasks[task_idx].size_dl);
+        curl_easy_getinfo(eh, CURLINFO_REDIRECT_TIME_T,
+                          (curl_off_t *)tasks[task_idx].redirect_time);
+        curl_easy_getinfo(eh, CURLINFO_HEADER_SIZE,
+                          (long *)tasks[task_idx].header_size);
+        curl_easy_getinfo(eh, CURLINFO_REDIRECT_COUNT,
+                          (long *)tasks[task_idx].redirect_count);
+
+        long conn_id = 0;
+        curl_easy_getinfo(eh, CURLINFO_CONN_ID, &conn_id);
+        *(tasks[task_idx].connection_reused) = (conn_id > 0) ? 1 : 0;
+
+        tasks[task_idx].status =
+            (msg->data.result == CURLE_OK) ? RET_SUCCESS : RET_FAIL;
+
+        if (msg->data.result != CURLE_OK) {
+            fprintf(stderr, "[http_pool] task %ld (tile %d) failed: %s\n",
+                    task_idx, tasks[task_idx].tile_id,
+                    curl_easy_strerror(msg->data.result));
+            if (msg->data.result == CURLE_HTTP2 ||
+                msg->data.result == CURLE_HTTP2_STREAM)
+                fprintf(stderr, "  → HTTP/2 protocol error\n");
+            else if (msg->data.result == CURLE_COULDNT_CONNECT)
+                fprintf(stderr, "  → Connection refused\n");
+            else if (msg->data.result == CURLE_SSL_CONNECT_ERROR)
+                fprintf(stderr, "  → SSL/TLS handshake failed\n");
+        }
+    }
+
+    /* ── clean up ────────────────────────────────────────────────────────── */
+    for (int i = 0; i < num_tasks; i++) {
+        if (tasks[i].easy_handle) {
+            curl_multi_remove_handle(multi_handle, tasks[i].easy_handle);
+            curl_easy_cleanup(tasks[i].easy_handle);
+            tasks[i].easy_handle = NULL;
+        }
+    }
+    curl_multi_cleanup(multi_handle);
+    return RET_SUCCESS;
+}
