@@ -130,4 +130,4 @@ sudo perf report -i perf.data
 
 ---
 **Authors:** Future Internet Laboratory (Hanoi University of Science and Technology)  
-**References:** Based on the architecture proposed in *"Scalable and resilient 360-degree-video adaptive streaming over HTTP/2 against sudden network drops"* (Computer Communications, 2024).
+**References:** Based on our incoming paper :>.
