@@ -65,7 +65,7 @@
 #define CTS_SLR_TAU_CPU        0.75f
 
 /* SLR QoE risk definition: buffer below this (seconds) = risk event */
-#define CTS_SLR_BUF_RISK_THR   0.5f
+#define CTS_SLR_BUF_RISK_THR   2.5f
 
 /* Protocol processing overhead factors (same scale as resource_monitor) */
 #define CTS_PROTO_FACTOR_H1    0.8f

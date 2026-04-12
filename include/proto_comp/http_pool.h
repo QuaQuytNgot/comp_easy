@@ -62,7 +62,6 @@
 /* ─────────────────────────────────────────────────────────────────────────
  * Early-termination sentinel written to download_task_t.status when a tile
  * is cancelled because p_i(t) dropped below the pool's tau threshold.
- * Value 2 never collides with RET_FAIL (0) or RET_SUCCESS (1).
  * ───────────────────────────────────────────────────────────────────────── */
 #define RET_EARLY_TERMINATED  2u
 

@@ -832,10 +832,10 @@ RET request_handler_v2_post_get_info(request_handler_v2_t *self,
     //     return RET_FAIL;
     // }
 
-    if (http_pool_get_parallel_dynamic(self->pool, jobs, total_jobs,
-                               self->max_parallel_downloads, rm) != RET_SUCCESS) {
-    // if (http_pool_get_parallel(self->pool, jobs, total_jobs,
-    //                            self->max_parallel_downloads) != RET_SUCCESS) {
+    // if (http_pool_get_parallel_dynamic(self->pool, jobs, total_jobs,
+    //                            self->max_parallel_downloads, rm) != RET_SUCCESS) {
+    if (http_pool_get_parallel(self->pool, jobs, total_jobs,
+                               self->max_parallel_downloads) != RET_SUCCESS) {
         fprintf(stderr, "[rh_v2] download failed\n");
         for (int i = 0; i < total_jobs; i++) free(urls[i]);
         free(urls); free(jobs);

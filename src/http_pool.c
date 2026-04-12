@@ -394,6 +394,10 @@ RET http_pool_get_parallel(http_pool_t     *pool,
                             "(p=%.4f < tau=%.4f) — RESET_STREAM\n",
                             tasks[i].tile_id, p, pool->early_term_tau);
 
+                    curl_off_t dl_size = 0;
+                    curl_easy_getinfo(tasks[i].easy_handle, CURLINFO_SIZE_DOWNLOAD_T, &dl_size);
+                    if (tasks[i].size_dl) *(tasks[i].size_dl) = dl_size;
+
                     curl_multi_remove_handle(multi_handle, tasks[i].easy_handle);
                     curl_easy_cleanup(tasks[i].easy_handle);
                     tasks[i].easy_handle = NULL;
@@ -527,7 +531,7 @@ RET http_pool_get_parallel_dynamic(http_pool_t     *pool,
             curl_easy_setopt(eh, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_3ONLY);
 
         tasks[i].status = RET_FAIL;
-        tasks[i].is_dispatched = 0; // Đánh dấu chưa gửi vào Multi-stack
+        tasks[i].is_dispatched = 0; 
     }
 
     /* ── Request tiles with high probability first ── */
@@ -555,9 +559,14 @@ RET http_pool_get_parallel_dynamic(http_pool_t     *pool,
             resource_monitor_update(rm);
             float stress = get_system_status(rm); 
 
-            if (stress < 0.20f) { // If CPU load < 20%
+            if (stress < 0.80f) { // If CPU load < 80%
                 for (int i = 0; i < num_tasks; i++) {
                     if (!tasks[i].is_dispatched) {
+                        if (pool->early_term_tau > 0.0f && tasks[i].prob_ptr && *(tasks[i].prob_ptr) < pool->early_term_tau) {
+                            tasks[i].status = RET_EARLY_TERMINATED;
+                            tasks[i].is_dispatched = 1;
+                            continue; 
+                        }
                         curl_multi_add_handle(multi_handle, tasks[i].easy_handle);
                         tasks[i].is_dispatched = 1;
                         active_bitmap[i] = 1;
@@ -572,10 +581,30 @@ RET http_pool_get_parallel_dynamic(http_pool_t     *pool,
         if (pool->early_term_tau > 0.0f) {
             for (int i = 0; i < num_tasks; i++) {
                 if (!active_bitmap[i] || !tasks[i].prob_ptr) continue;
-                if (*(tasks[i].prob_ptr) < pool->early_term_tau) {
+
+                float p = *(tasks[i].prob_ptr);
+                if (p < pool->early_term_tau) {
+                    // 1. Đã thêm lại lệnh in log để bạn theo dõi
+                    fprintf(stderr,
+                            "[http_pool] EARLY-TERM tile %d "
+                            "(p=%.4f < tau=%.4f) — RESET_STREAM\n",
+                            tasks[i].tile_id, p, pool->early_term_tau);
+
+                    curl_off_t dl_size = 0;
+                    curl_easy_getinfo(tasks[i].easy_handle, CURLINFO_SIZE_DOWNLOAD_T, &dl_size);
+                    if (tasks[i].size_dl) *(tasks[i].size_dl) = dl_size;
+
                     curl_multi_remove_handle(multi_handle, tasks[i].easy_handle);
+                    
+                    // 2. Dọn dẹp bộ nhớ ngay lập tức
+                    curl_easy_cleanup(tasks[i].easy_handle);
+                    tasks[i].easy_handle = NULL;
+                    
                     tasks[i].status = RET_EARLY_TERMINATED;
                     active_bitmap[i] = 0;
+                    
+                    // 3. Trừ đi số luồng đang chạy để vòng lặp while thoát đúng lúc
+                    if (--still_running < 0) still_running = 0;
                 }
             }
         }

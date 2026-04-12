@@ -13,6 +13,10 @@ typedef uint64_t bw_t;
 typedef uint64_t count_t;
 typedef int64_t count_time_t;
 
+#define QOE_ALPHA 1.0f
+#define QOE_BETA  1.85f
+#define QOE_GAMMA 1.0f
+
 #define RET         unsigned int
 #define RET_FAIL    0
 #define RET_SUCCESS 1

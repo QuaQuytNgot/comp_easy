@@ -5,7 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-double VIDEO_BIT_RATE[5] = {11839.0, 23066.0, 37100.0, 59496.0, 94589.0};
+// double VIDEO_BIT_RATE[5] = {11839.0, 23066.0, 37100.0, 59496.0, 94589.0};
+double VIDEO_BIT_RATE[5] = {94712.0, 184528.0, 296800.0, 475968.0, 756712.0};
 
 RET abr_selector_init(abr_selector_t *abr_selector, int type)
 {
