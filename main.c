@@ -379,26 +379,11 @@ int main(void)
         printf("[METRICS] Seg QoE=%.3f  Total QoE=%.3f\n",
                seg_qoe, total_qoe_score);
 
-        /* CSV */
-        metrics_log_entry_t entry;
-        entry.segment_id          = seg + 1;
-        entry.network_bw_mbps     = meas_bw / 1e6f;
-        entry.avg_vp_bitrate_kbps = current_avg_tile_kbps;
-        entry.buffer_level_s      = buf_level;
-        entry.rebuffer_s          = rebuffer_s;
-        entry.smoothness          = smoothness_kbps;
-        entry.seg_qoe             = seg_qoe;
-        entry.total_qoe           = total_qoe_score;
-        entry.et_count   = (ACTIVE_ALGORITHM == SCHEDULER_SLR) ? rh.early_term_count : 0;
-        entry.cpu_rho    = (ACTIVE_ALGORITHM == SCHEDULER_SLR) ? rho : 0.0f;
-        metrics_logger_write(&m_logger, &entry);
-
         prev_vp_bitrate_kbps = current_avg_tile_kbps;
 
         /* ── Step H: Buffer update ───────────────────────────────────────── */
         /*Pre-buffering: first 3 segment will not count rebuffer*/
         if (!is_playing) {
-            
             buf_level += SEGMENT_DURATION;
             printf("[PLAYER] Pre-buffering... (Buffer hiện tại: %.2fs)\n", buf_level);
             
@@ -415,6 +400,32 @@ int main(void)
 
         if (buf_level > MAX_BUFFER_SIZE) buf_level = MAX_BUFFER_SIZE;
         printf("[BUF] %.2fs\n", buf_level);
+
+        /* ========================================================
+         * DI CHUYỂN KHỐI GHI LOG CSV XUỐNG ĐÂY (SAU KHI ĐÃ CỘNG BUFFER)
+         * ======================================================== */
+        metrics_log_entry_t entry;
+        entry.segment_id          = seg + 1;
+        entry.network_bw_mbps     = meas_bw / 1e6f;
+        entry.avg_vp_bitrate_kbps = current_avg_tile_kbps;
+        entry.buffer_level_s      = buf_level;  // Lúc này buf_level đã là 1.0s ở segment 1
+        entry.rebuffer_s          = rebuffer_s;
+        entry.smoothness          = smoothness_kbps;
+        
+        // Nhớ áp dụng luật QoE = 0 khi Pre-buffering giống như đã bàn ở lượt trước
+        if (!is_playing) {
+            entry.seg_qoe = 0.0f;
+            // Lưu ý: Tùy logic của bạn có muốn trừ lại total_qoe_score đã cộng ở trên không
+            // Ở đây mình chỉ set seg_qoe trong file CSV thành 0 để vẽ chart cho đúng
+        } else {
+            entry.seg_qoe = seg_qoe;
+        }
+        
+        entry.total_qoe           = total_qoe_score; 
+        entry.et_count   = (ACTIVE_ALGORITHM == SCHEDULER_SLR) ? rh.early_term_count : 0;
+        entry.cpu_rho    = (ACTIVE_ALGORITHM == SCHEDULER_SLR) ? rho : 0.0f;
+        metrics_logger_write(&m_logger, &entry);
+        /* ======================================================== */
 
         /* Step I: feed HMD sample */
         add_viewport_sample(&vpes, actual_yaw, actual_pitch);

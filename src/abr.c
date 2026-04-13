@@ -5,7 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-// double VIDEO_BIT_RATE[5] = {11839.0, 23066.0, 37100.0, 59496.0, 94589.0};
 double VIDEO_BIT_RATE[5] = {94712.0, 184528.0, 296800.0, 475968.0, 756712.0};
 
 RET abr_selector_init(abr_selector_t *abr_selector, int type)
@@ -31,11 +30,13 @@ RET abr_selector_init(abr_selector_t *abr_selector, int type)
   return RET_SUCCESS;
 }
 
-int abr_for_normal_buf(float bw_prediction,
+int abr_for_normal_buf(float bw_prediction_bps,
                        int P,
                        float buffer_size,
                        int last_quality,
-                       float *qoe)
+                       float *qoe,
+                       int num_vp_tiles,
+                       int total_tiles)
 {
   int total_combos = pow(NO_VIDEO_VERSION_NORMAL, P);
   int CHUNK_COMBO_OPTIONS[total_combos][P];
@@ -53,15 +54,6 @@ int abr_for_normal_buf(float bw_prediction,
 
   int best_combo[5] = {0};
   float max_reward = -100000.0f;
-
-  float bw_bytes_per_sec = bw_prediction;
-
-  // #ifdef DEBUG_ABR
-  // printf("[ABR] Normal Buffer Mode\n");
-  // printf("  Bandwidth: %.2f bytes/sec = %.2f Mbps\n",
-  //        bw_bytes_per_sec, bw_bytes_per_sec * 8.0 / 1000000.0);
-  // printf("  Buffer: %.2f sec, Last Quality: %d\n", buffer_size, last_quality);
-  // #endif
   const int MAX_QUALITY_JUMP = 2;
 
   for (int i = 0; i < total_combos; i++)
@@ -97,11 +89,14 @@ int abr_for_normal_buf(float bw_prediction,
     for (int j = 0; j < P; j++)
     {
       int chunk_quality = combo_arr[j];
-
       bitrate_sum += VIDEO_BIT_RATE[chunk_quality];
 
-      float chunk_size_bytes = VIDEO_BIT_RATE[chunk_quality];
-      float download_time = chunk_size_bytes / bw_bytes_per_sec;
+      // TÍNH TOÁN DOWNLOAD TIME CHUẨN (Tổng dung lượng VP + BG tính bằng bits)
+      float vp_bits = num_vp_tiles * VIDEO_BIT_RATE[chunk_quality] * 8.0f;
+      float bg_bits = (total_tiles - num_vp_tiles) * VIDEO_BIT_RATE[0] * 8.0f;
+      float total_segment_bits = vp_bits + bg_bits;
+
+      float download_time = total_segment_bits / bw_prediction_bps;
 
       if (curr_buffer < download_time)
       {
@@ -126,9 +121,9 @@ int abr_for_normal_buf(float bw_prediction,
     float rebuffer_penalty = curr_rebuff;
     float smoothness_kbits = (smoothness * 8.0) / 1000.0;
 
-    float alpha_adjusted = 0.8f; // Reduced bitrate reward
-    float beta_adjusted = 2.5f;  // Increased rebuffer penalty
-    float theta_adjusted = 0.6f; // Reduced smoothness weight
+    float alpha_adjusted = 0.8f; 
+    float beta_adjusted = 2.5f;  
+    float theta_adjusted = 0.6f; 
 
     float reward = alpha_adjusted * bitrate_sum_kbits -
                    beta_adjusted * rebuffer_penalty * 1000.0 -
@@ -142,21 +137,17 @@ int abr_for_normal_buf(float bw_prediction,
     }
   }
 
-  // #ifdef DEBUG_ABR
-  // printf("  Selected Quality: %d (QP%d, %.2f KB)\n",
-  //        best_combo[0], tile_version_to_num(best_combo[0]),
-  //        VIDEO_BIT_RATE[best_combo[0]] / 1024.0);
-  // printf("  Max Reward: %.2f\n", max_reward);
-  // #endif
   *qoe = max_reward;
   return best_combo[0];
 }
 
-int abr_for_danger_buf(float bw_prediction,
+int abr_for_danger_buf(float bw_prediction_bps,
                        int P,
                        float buffer_size,
                        int last_quality,
-                       float *qoe)
+                       float *qoe,
+                       int num_vp_tiles,
+                       int total_tiles)
 {
   int total_combos = pow(NO_VIDEO_VERSION_DANGER, P);
   int CHUNK_COMBO_OPTIONS[total_combos][P];
@@ -174,16 +165,6 @@ int abr_for_danger_buf(float bw_prediction,
   int best_combo[5] = {0};
   float max_reward = -100000.0f;
 
-  float bw_bytes_per_sec = bw_prediction;
-
-  // #ifdef DEBUG_ABR
-  // printf("[ABR] DANGER Buffer Mode\n");
-  // printf("  Bandwidth: %.2f bytes/sec = %.2f Mbps\n",
-  //        bw_bytes_per_sec, bw_bytes_per_sec * 8.0 / 1000000.0);
-  // printf("  Buffer: %.2f sec (CRITICAL!), Last Quality: %d\n",
-  //        buffer_size, last_quality);
-  // #endif
-
   for (int i = 0; i < total_combos; i++)
   {
     int combo_arr[P];
@@ -205,8 +186,12 @@ int abr_for_danger_buf(float bw_prediction,
       int chunk_quality = combo_arr[j];
       bitrate_sum += VIDEO_BIT_RATE[chunk_quality];
 
-      float chunk_size_bytes = VIDEO_BIT_RATE[chunk_quality];
-      float download_time = chunk_size_bytes / bw_bytes_per_sec;
+      // TÍNH TOÁN DOWNLOAD TIME CHUẨN
+      float vp_bits = num_vp_tiles * VIDEO_BIT_RATE[chunk_quality] * 8.0f;
+      float bg_bits = (total_tiles - num_vp_tiles) * VIDEO_BIT_RATE[0] * 8.0f;
+      float total_segment_bits = vp_bits + bg_bits;
+
+      float download_time = total_segment_bits / bw_prediction_bps;
 
       if (curr_buffer < download_time)
       {
@@ -231,10 +216,9 @@ int abr_for_danger_buf(float bw_prediction,
     float rebuffer_penalty = curr_rebuff;
     float smoothness_kbits = (smoothness * 8.0) / 1000.0;
 
-
-    float alpha_adjusted = 0.5f; // Low bitrate reward
-    float beta_adjusted = 4.0f;  // Very high rebuffer penalty
-    float theta_adjusted = 0.3f; // Low smoothness weight
+    float alpha_adjusted = 0.5f; 
+    float beta_adjusted = 4.0f;  
+    float theta_adjusted = 0.3f; 
 
     float reward = alpha_adjusted * bitrate_sum_kbits -
                    beta_adjusted * rebuffer_penalty * 1000.0 -
@@ -248,20 +232,17 @@ int abr_for_danger_buf(float bw_prediction,
     }
   }
 
-  // #ifdef DEBUG_ABR
-  // printf("  Selected Quality: %d (QP%d, %.2f KB) - Conservative\n",
-  //        best_combo[0], tile_version_to_num(best_combo[0]),
-  //        VIDEO_BIT_RATE[best_combo[0]] / 1024.0);
-  // #endif
   *qoe = max_reward;
   return best_combo[0];
 }
 
-int abr_for_high_buf(float bw_prediction,
+int abr_for_high_buf(float bw_prediction_bps,
                      int P,
                      float buffer_size,
                      int last_quality,
-                     float *qoe)
+                     float *qoe,
+                     int num_vp_tiles,
+                     int total_tiles)
 {
   int total_combos = pow(NO_VIDEO_VERSION_HIGH, P);
   int CHUNK_COMBO_OPTIONS[total_combos][P];
@@ -279,17 +260,7 @@ int abr_for_high_buf(float bw_prediction,
 
   int best_combo[5] = {0};
   float max_reward = -100000.0f;
-
-  float bw_bytes_per_sec = bw_prediction;
   const int MAX_QUALITY_JUMP = 2;
-
-  // #ifdef DEBUG_ABR
-  // printf("[ABR] HIGH Buffer Mode\n");
-  // printf("  Bandwidth: %.2f bytes/sec = %.2f Mbps\n",
-  //        bw_bytes_per_sec, bw_bytes_per_sec * 8.0 / 1000000.0);
-  // printf("  Buffer: %.2f sec (SAFE), Last Quality: %d\n",
-  //        buffer_size, last_quality);
-  // #endif
 
   for (int i = 0; i < total_combos; i++)
   {
@@ -326,8 +297,12 @@ int abr_for_high_buf(float bw_prediction,
       int chunk_quality = combo_arr[j];
       bitrate_sum += VIDEO_BIT_RATE[chunk_quality];
 
-      float chunk_size_bytes = VIDEO_BIT_RATE[chunk_quality];
-      float download_time = chunk_size_bytes / bw_bytes_per_sec;
+      // TÍNH TOÁN DOWNLOAD TIME CHUẨN
+      float vp_bits = num_vp_tiles * VIDEO_BIT_RATE[chunk_quality] * 8.0f;
+      float bg_bits = (total_tiles - num_vp_tiles) * VIDEO_BIT_RATE[0] * 8.0f;
+      float total_segment_bits = vp_bits + bg_bits;
+
+      float download_time = total_segment_bits / bw_prediction_bps;
 
       if (curr_buffer < download_time)
       {
@@ -352,9 +327,9 @@ int abr_for_high_buf(float bw_prediction,
     float rebuffer_penalty = curr_rebuff;
     float smoothness_kbits = (smoothness * 8.0) / 1000.0;
     
-    float alpha_adjusted = 1.2f; // High bitrate reward
-    float beta_adjusted = 1.5f;  // Low rebuffer penalty (we have buffer)
-    float theta_adjusted = 0.8f; // Moderate smoothness
+    float alpha_adjusted = 1.2f; 
+    float beta_adjusted = 1.5f;  
+    float theta_adjusted = 0.8f; 
 
     float reward = alpha_adjusted * bitrate_sum_kbits -
                    beta_adjusted * rebuffer_penalty * 1000.0 -
@@ -368,11 +343,6 @@ int abr_for_high_buf(float bw_prediction,
     }
   }
 
-  // #ifdef DEBUG_ABR
-  // printf("  Selected Quality: %d (QP%d, %.2f KB) - Aggressive\n",
-  //        best_combo[0], tile_version_to_num(best_combo[0]),
-  //        VIDEO_BIT_RATE[best_combo[0]] / 1024.0);
-  // #endif
   *qoe = max_reward;
   return best_combo[0];
 }
