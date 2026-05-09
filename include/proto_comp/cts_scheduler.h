@@ -57,12 +57,16 @@
 #define CTS_SLR_LAMBDA_INIT    0.05f  /* bandwidth multiplier λ              */
 #define CTS_SLR_MU_INIT        0.1f  /* CPU-load multiplier μ               */
 #define CTS_SLR_GAMMA_INIT     0.2f  /* QoE-risk multiplier γ               */
+#define CTS_SLR_BETA_INIT      0.0f  /* Smoothness multiplier beta */
 
 /* SLR subgradient step size */
 #define CTS_SLR_STEP           0.05f
 
 /* SLR CPU threshold τ_CPU (normalised to [0,1]) */
 #define CTS_SLR_TAU_CPU        0.75f
+
+/* SLR Smoothness threshold*/
+#define CTS_SLR_TAU_SMOOTH     0.5f
 
 /* SLR QoE risk definition: buffer below this (seconds) = risk event */
 #define CTS_SLR_BUF_RISK_THR   2.5f
@@ -94,6 +98,9 @@ typedef struct {
     float         rho_sys;       /* from get_system_status()                 */
     float         c_proc_global; /* from resource_monitor_get_cproc()        */
     int           last_quality;  /* last chosen quality (for smoothness)     */
+
+    int           *prev_versions; /*quality arry index of the previous segment*/  
+    int           is_fluctuating; /*does user fluctuate their head (lien tuc)*/
 } cts_input_t;
 
 /* ── shared output ────────────────────────────────────────────────────────── */
@@ -118,6 +125,7 @@ typedef struct {
     float lambda;   /* bandwidth multiplier                                   */
     float mu;       /* CPU-load multiplier                                    */
     float gamma;    /* QoE-risk multiplier                                    */
+    float beta_smooth;     /* Spatial smoothness multiplier            */
 } slr_state_t;
 
 /* ── public API ───────────────────────────────────────────────────────────── */

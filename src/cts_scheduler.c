@@ -580,6 +580,48 @@ static int cmp_desc(const void *a, const void *b)
                                      : 0;
 }
 
+static float calc_spatial_smoothness(int tile_id, int chosen_v, const int *prev_versions, int N)
+{
+    if (!prev_versions)
+        return 0.0f;
+
+    float s_vi = 0.0f;
+    float q_norm_v = (float)VIDEO_BIT_RATE[chosen_v] / SLR_REF_BITRATE;
+
+    int cols = 8;
+    int rows = 6;
+
+    if(N != cols * rows)    return 0.0f;
+
+    int r = tile_id / cols;
+    int c = tile_id % cols;
+
+    int neighbors[4];
+    int num_neighbors = 0;
+    
+    neighbors[num_neighbors++] = r * cols + (c - 1 + cols) % cols;
+    neighbors[num_neighbors++] = r * cols + (c + 1) % cols;
+
+    if(r < rows - 1)
+    {
+        neighbors[num_neighbors++] = (r + 1) * cols + c;
+    }
+
+    for (int k = 0; k < num_neighbors; k++)
+    {
+        int neighbor_idx = neighbors[k];
+        float q_norm_neighbor_dev = (float)VIDEO_BIT_RATE[prev_versions[neighbor_idx]] / SLR_REF_BITRATE;
+
+        float diff = q_norm_v - q_norm_neighbor_dev;
+        if (diff > 0.0f)
+        {
+            s_vi += diff;
+        }
+    }
+
+    return s_vi;
+}
+
 /* ── shared init ────────────────────────────────────────────────────────── */
 
 void cts_input_init(cts_input_t *in)
@@ -824,10 +866,8 @@ static RET run_slr(const cts_input_t *in, cts_output_t *out, slr_state_t *slr)
 
         for (int v = 0; v < CTS_NUM_QUALITIES; v++)
         {
-            /* Chi phí Băng thông */
+            /* cost bandwidth - this is mapping from version to bitrates (normalize) */
             float cost_bw = (float)VIDEO_BIT_RATE[v] / ref;
-
-            /* Giá trị Hữu dụng */
             float utility = logf(cost_bw + 1.0f);
 
             /* CPU Norm */
@@ -835,9 +875,17 @@ static RET run_slr(const cts_input_t *in, cts_output_t *out, slr_state_t *slr)
             float cp_max = cts_cproc(CTS_NUM_QUALITIES - 1, STREAM_HTTP_3_0, in->c_proc_global);
             float cp_norm = (cp_max > 0.0f) ? (cp_raw / cp_max) : cp_raw;
 
+            // penalty for spatial space (do phat khong gian)
+            float s_vi = 0.0f;
+            if (in->prev_versions)
+            {
+                s_vi = calc_spatial_smoothness(i, v, in->prev_versions, N);
+            }
+
             /* L = p*U(v) - λ*C_bw(v) - μ*C_cpu(v) - γ*C_bw(v) */
-            float dl = (p * utility) - (slr->lambda * cost_bw) 
-                        - (slr->mu * cp_norm) - (slr->gamma * risk_norm);
+            float dl = (p * utility) - (slr->lambda * cost_bw) - 
+                        (slr->mu * cp_norm) - (slr->gamma * risk_norm)
+                        - (slr->beta_smooth * s_vi);
 
             if (dl > best_dl)
             {
@@ -854,7 +902,7 @@ static RET run_slr(const cts_input_t *in, cts_output_t *out, slr_state_t *slr)
     }
 
     /* ── Aggregate primal sums ───────────────────────────────────────────── */
-    float sum_r = 0.0f, sum_cpu = 0.0f, sum_pq = 0.0f;
+    float sum_r = 0.0f, sum_cpu = 0.0f, sum_pq = 0.0f, sum_s = 0.0f;
     for (int i = 0; i < N; i++)
     {
         sum_r += out->tiles[i].quality_bps;
@@ -862,12 +910,18 @@ static RET run_slr(const cts_input_t *in, cts_output_t *out, slr_state_t *slr)
 
         float chosen_cost_bw = out->tiles[i].quality_bps / ref;
         sum_pq += in->p_map[i] * logf(chosen_cost_bw + 1.0f);
+
+        if (in->prev_versions) {
+            sum_s += calc_spatial_smoothness(i, out->tiles[i].chosen_version, in->prev_versions, N);
+        }
     }
 
     /* Objective value logging (use clamped risk here so objective isn't artificially inflated) */
     float actual_risk = (buffer_slack_for_update > 0.0f) ? buffer_slack_for_update : 0.0f;
 
-    out->objective_value = sum_pq - slr->lambda * (sum_r - in->bandwidth) / ref - slr->mu * (sum_cpu - CTS_SLR_TAU_CPU * (float)N) - slr->gamma * actual_risk;
+    out->objective_value = sum_pq - slr->lambda * (sum_r - in->bandwidth) / ref 
+                        - slr->mu * (sum_cpu - CTS_SLR_TAU_CPU * (float)N) 
+                        - slr->gamma * actual_risk - slr->beta_smooth * (sum_s - CTS_SLR_TAU_SMOOTH);
 
     printf("[SLR] λ=%.4f μ=%.4f γ=%.4f  Obj=%.2f  Σr=%.2f Mbps  Σcpu=%.3f\n",
            slr->lambda, slr->mu, slr->gamma,
@@ -878,11 +932,20 @@ static RET run_slr(const cts_input_t *in, cts_output_t *out, slr_state_t *slr)
 
     float norm_bw_slack = (sum_r - in->bandwidth) / ((float)N * ref);
     float norm_cpu_slack = (sum_cpu - CTS_SLR_TAU_CPU * (float)N) / (float)N;
+    float norm_smooth_slack = sum_s - CTS_SLR_TAU_SMOOTH;
 
     /* Multiplier updates - passing the UNCLAMPED buffer_slack so gamma can decay */
     slr->lambda += eta * norm_bw_slack;
     slr->mu += eta * norm_cpu_slack;
     slr->gamma += eta * buffer_slack_for_update;
+
+    if (in->is_fluctuating)
+    {
+        slr->beta_smooth += eta * norm_smooth_slack;
+    } else 
+    {
+        slr->beta_smooth = 0.0f;
+    }
 
     /* Apply lower bounds (projection to positive orthant) */
     if (slr->lambda < 0.0f)
@@ -891,6 +954,8 @@ static RET run_slr(const cts_input_t *in, cts_output_t *out, slr_state_t *slr)
         slr->mu = 0.0f;
     if (slr->gamma < 0.0f)
         slr->gamma = 0.0f;
+    if (slr->beta_smooth < 0.0f)
+        slr->beta_smooth = 0.0f;
 
     /* Apply upper bounds */
     if (slr->lambda > 1.2f)
@@ -899,6 +964,8 @@ static RET run_slr(const cts_input_t *in, cts_output_t *out, slr_state_t *slr)
         slr->mu = 1.0f;
     if (slr->gamma > 2.0f)
         slr->gamma = 2.0f;
+    if (slr->beta_smooth > 1.5f)
+        slr->beta_smooth = 1.5f;
 
     return RET_SUCCESS;
 }
