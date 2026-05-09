@@ -42,14 +42,14 @@
 #define VP_HISTORY_SZ            20
 #define PROTOCOL                 STREAM_HTTP_3_0
 #define TAU_EARLY_TERM           0.10f
-#define RHO_SYS_WARN             0.60f
+#define RHO_SYS_WARN             0.80f
 #define VP_HALF_YAW              (VIEWPORT_WIDTH_DEGREES  / 2.0f)
 #define VP_HALF_PITCH            (VIEWPORT_HEIGHT_DEGREES / 2.0f)
 #define SACCADE_THRESHOLD_DEG_S  30.0f
 #define ACTIVE_ALGORITHM         SCHEDULER_SLR
 
 /* [BUG-1 FIX] Băng thông khởi tạo phải là bits/s để khớp VIDEO_BIT_RATE[] */
-#define BW_INIT_BITS_S           500000.0f    /* 0.5 Mbps */
+#define BW_INIT_BITS_S           10000000.0f    /* 10 Mbps */
 
 /* ── QoE constants ──────────────────────────────────────────────────────── */
 #define MAX_TILE_BITRATE_KBPS    2000.0f
@@ -281,8 +281,10 @@ int main(void)
         printf("[PM] %d viewport tiles\n", nvp);
 
         /* Step D: bandwidth estimate (bits/s) */
-        float bw = harmonic_bw(bw_hist, BW_HIST) * 0.90f;
+        float bw = harmonic_bw(bw_hist, BW_HIST) *1.0f;
         printf("[BW] est %.2f Mbps\n", bw / 1e6f);
+
+        // bw = 15000000.0f;
 
         /* Step E: CTS scheduling */
         cts_input_t cin;
@@ -318,6 +320,21 @@ int main(void)
 
         if (nvp > 0) last_q = sched_out.tiles[vp_tiles[0]].chosen_version;
 
+        printf("[VP QUALITIES] ");
+        for (int i = 0; i < nvp; i++) {
+            int tid = vp_tiles[i];
+            int version = sched_out.tiles[tid].chosen_version;
+            
+            // Bạn có thể in nguyên version (V0, V1...)
+            printf("T%d:V%d ", tid, version);
+            
+            // HOẶC nếu muốn in cả Kbps ra cho rõ ràng thì dùng dòng này:
+            // float kbps = sched_out.tiles[tid].quality_bps / 1000.0f;
+            // printf("T%d:V%d(%.0f) ", tid, version, kbps);
+        }
+        printf("\n");
+        /* ========================================================== */
+
         /* ── Step F: Download */
         rh.cts_out = &sched_out;
 
@@ -352,11 +369,12 @@ int main(void)
 
         /* meas_bw = total bits / real wall-clock time (bits/s) */
         float meas_bw = (actual_wall_dl_s > 0.0f && tot_bytes > 0.0f)
-                        ? (tot_bytes * 8.0f / actual_wall_dl_s)
+                        ? (tot_bytes / actual_wall_dl_s)
                         : bw;
+                        
         bw_hist[bw_idx++ % BW_HIST] = meas_bw;
         printf("[BW] meas %.2f Mbps (%.3fs wall, %.1f KB)\n",
-               meas_bw / 1e6f, actual_wall_dl_s, tot_bytes / 1024.0f);
+               meas_bw * 8.0f / 1e6f, actual_wall_dl_s, tot_bytes / 1024.0f);
 
         float rebuffer_s = 0.0f;
         if (is_playing) {
@@ -401,9 +419,6 @@ int main(void)
         if (buf_level > MAX_BUFFER_SIZE) buf_level = MAX_BUFFER_SIZE;
         printf("[BUF] %.2fs\n", buf_level);
 
-        /* ========================================================
-         * DI CHUYỂN KHỐI GHI LOG CSV XUỐNG ĐÂY (SAU KHI ĐÃ CỘNG BUFFER)
-         * ======================================================== */
         metrics_log_entry_t entry;
         entry.segment_id          = seg + 1;
         entry.network_bw_mbps     = meas_bw / 1e6f;
@@ -411,12 +426,11 @@ int main(void)
         entry.buffer_level_s      = buf_level;  // Lúc này buf_level đã là 1.0s ở segment 1
         entry.rebuffer_s          = rebuffer_s;
         entry.smoothness          = smoothness_kbps;
-        
-        // Nhớ áp dụng luật QoE = 0 khi Pre-buffering giống như đã bàn ở lượt trước
+
         if (!is_playing) {
             entry.seg_qoe = 0.0f;
-            // Lưu ý: Tùy logic của bạn có muốn trừ lại total_qoe_score đã cộng ở trên không
-            // Ở đây mình chỉ set seg_qoe trong file CSV thành 0 để vẽ chart cho đúng
+            total_qoe_score -= seg_qoe;
+
         } else {
             entry.seg_qoe = seg_qoe;
         }

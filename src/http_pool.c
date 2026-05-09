@@ -554,12 +554,12 @@ RET http_pool_get_parallel_dynamic(http_pool_t     *pool,
     do {
         CURLMcode mc = curl_multi_perform(multi_handle, &still_running);
 
-        /* Check CPU to send Stage 2 */
+        /* 1. PRIMARY LOGIC: Check CPU to send Stage 2 early if system is healthy */
         if (!stage_2_done) {
             resource_monitor_update(rm);
             float stress = get_system_status(rm); 
 
-            if (stress < 0.80f) { // If CPU load < 80%
+            if (stress < 0.80f) { // If CPU load < 80%, admit Stage 2
                 for (int i = 0; i < num_tasks; i++) {
                     if (!tasks[i].is_dispatched) {
                         if (pool->early_term_tau > 0.0f && tasks[i].prob_ptr && *(tasks[i].prob_ptr) < pool->early_term_tau) {
@@ -577,14 +577,33 @@ RET http_pool_get_parallel_dynamic(http_pool_t     *pool,
             }
         }
 
-        /* Early Termination Logic */
+        /* 2. THE FAIL-SAFE FIX: If CPU stayed high and Stage 1 finished, force-dispatch */
+        if (still_running == 0 && !stage_2_done) {
+            for (int i = 0; i < num_tasks; i++) {
+                if (tasks[i].is_dispatched) continue;
+                
+                if (pool->early_term_tau > 0.0f && tasks[i].prob_ptr 
+                    && *(tasks[i].prob_ptr) < pool->early_term_tau) {
+                    tasks[i].status = RET_EARLY_TERMINATED;
+                    tasks[i].is_dispatched = 1;
+                    continue;
+                }
+                
+                curl_multi_add_handle(multi_handle, tasks[i].easy_handle);
+                tasks[i].is_dispatched = 1;
+                active_bitmap[i] = 1; 
+                still_running++;
+            }
+            stage_2_done = 1;  /* never block here again */
+        }
+
+        /* 3. Early Termination Logic (Cancel active tiles if viewport changes) */
         if (pool->early_term_tau > 0.0f) {
             for (int i = 0; i < num_tasks; i++) {
                 if (!active_bitmap[i] || !tasks[i].prob_ptr) continue;
 
                 float p = *(tasks[i].prob_ptr);
                 if (p < pool->early_term_tau) {
-                    // 1. Đã thêm lại lệnh in log để bạn theo dõi
                     fprintf(stderr,
                             "[http_pool] EARLY-TERM tile %d "
                             "(p=%.4f < tau=%.4f) — RESET_STREAM\n",
@@ -596,14 +615,12 @@ RET http_pool_get_parallel_dynamic(http_pool_t     *pool,
 
                     curl_multi_remove_handle(multi_handle, tasks[i].easy_handle);
                     
-                    // 2. Dọn dẹp bộ nhớ ngay lập tức
                     curl_easy_cleanup(tasks[i].easy_handle);
                     tasks[i].easy_handle = NULL;
                     
                     tasks[i].status = RET_EARLY_TERMINATED;
                     active_bitmap[i] = 0;
                     
-                    // 3. Trừ đi số luồng đang chạy để vòng lặp while thoát đúng lúc
                     if (--still_running < 0) still_running = 0;
                 }
             }

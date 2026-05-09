@@ -54,9 +54,9 @@
 #define CTS_MPC_BUF_RISK_LOW   0.5f  /* seconds — danger zone               */
 
 /* SLR initial multipliers */
-#define CTS_SLR_LAMBDA_INIT    1.0f  /* bandwidth multiplier λ              */
-#define CTS_SLR_MU_INIT        0.5f  /* CPU-load multiplier μ               */
-#define CTS_SLR_GAMMA_INIT     0.8f  /* QoE-risk multiplier γ               */
+#define CTS_SLR_LAMBDA_INIT    0.05f  /* bandwidth multiplier λ              */
+#define CTS_SLR_MU_INIT        0.1f  /* CPU-load multiplier μ               */
+#define CTS_SLR_GAMMA_INIT     0.2f  /* QoE-risk multiplier γ               */
 
 /* SLR subgradient step size */
 #define CTS_SLR_STEP           0.05f

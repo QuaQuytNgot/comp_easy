@@ -523,144 +523,162 @@
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
- 
+
 #ifndef SLR_REF_BITRATE
-#define SLR_REF_BITRATE  94712.0   /* This is VIDEO_BIT_RATE[0]   */
+#define SLR_REF_BITRATE 94712.0 /* This is VIDEO_BIT_RATE[0]   */
 #endif
- 
+
 /* ── internal helpers ───────────────────────────────────────────────────── */
- 
+
 static float proto_factor(HTTP_VERSION p)
 {
-    switch (p) {
-    case STREAM_HTTP_1_1: return CTS_PROTO_FACTOR_H1;
-    case STREAM_HTTP_2_0: return CTS_PROTO_FACTOR_H2;
-    case STREAM_HTTP_3_0: return CTS_PROTO_FACTOR_H3;
-    default:              return CTS_PROTO_FACTOR_H2;
+    switch (p)
+    {
+    case STREAM_HTTP_1_1:
+        return CTS_PROTO_FACTOR_H1;
+    case STREAM_HTTP_2_0:
+        return CTS_PROTO_FACTOR_H2;
+    case STREAM_HTTP_3_0:
+        return CTS_PROTO_FACTOR_H3;
+    default:
+        return CTS_PROTO_FACTOR_H2;
     }
 }
- 
+
 float cts_cproc(int v, HTTP_VERSION p, float cg)
 {
-    if (v < 0 || v >= CTS_NUM_QUALITIES) return cg;
-    return ((float)VIDEO_BIT_RATE[v] / (float)VIDEO_BIT_RATE[0])
-           * proto_factor(p) * cg;
+    if (v < 0 || v >= CTS_NUM_QUALITIES)
+        return cg;
+    return ((float)VIDEO_BIT_RATE[v] / (float)VIDEO_BIT_RATE[0]) * proto_factor(p) * cg;
 }
- 
+
 float cts_load_cpu(int v, HTTP_VERSION p)
 {
-    if (v < 0 || v >= CTS_NUM_QUALITIES) return 0.0f;
-    float max_load = (float)VIDEO_BIT_RATE[CTS_NUM_QUALITIES - 1]
-                   * CTS_PROTO_FACTOR_H3;
+    if (v < 0 || v >= CTS_NUM_QUALITIES)
+        return 0.0f;
+    float max_load = (float)VIDEO_BIT_RATE[CTS_NUM_QUALITIES - 1] * CTS_PROTO_FACTOR_H3;
     float load = ((float)VIDEO_BIT_RATE[v] * proto_factor(p)) / max_load;
     return (load > 1.0f) ? 1.0f : load;
 }
- 
+
 static float buf_risk(float buffer_level, float threshold)
 {
     float r = threshold - buffer_level;
     return (r > 0.0f) ? r : 0.0f;
 }
- 
-typedef struct { int idx; float pri; } ranked_t;
+
+typedef struct
+{
+    int idx;
+    float pri;
+} ranked_t;
 static int cmp_desc(const void *a, const void *b)
 {
     float pa = ((const ranked_t *)a)->pri;
     float pb = ((const ranked_t *)b)->pri;
-    return (pb > pa) ? 1 : (pb < pa) ? -1 : 0;
+    return (pb > pa) ? 1 : (pb < pa) ? -1
+                                     : 0;
 }
- 
+
 /* ── shared init ────────────────────────────────────────────────────────── */
- 
+
 void cts_input_init(cts_input_t *in)
 {
-    if (!in) return;
+    if (!in)
+        return;
     memset(in, 0, sizeof(*in));
-    in->protocol     = STREAM_HTTP_2_0;
+    in->protocol = STREAM_HTTP_2_0;
     in->buffer_level = MAX_BUFFER_SIZE / 2.0f;
     in->last_quality = 0;
 }
- 
+
 void slr_state_init(slr_state_t *s)
 {
-    if (!s) return;
+    if (!s)
+        return;
     s->lambda = CTS_SLR_LAMBDA_INIT;
-    s->mu     = CTS_SLR_MU_INIT;
-    s->gamma  = CTS_SLR_GAMMA_INIT;
+    s->mu = CTS_SLR_MU_INIT;
+    s->gamma = CTS_SLR_GAMMA_INIT;
 }
- 
+
 /* ─────────────────────────────────────────────────────────────────────────
  * GREEDY  (không thay đổi)
  * ───────────────────────────────────────────────────────────────────────── */
 static RET run_greedy(const cts_input_t *in, cts_output_t *out)
 {
-    int   N        = in->tile_count;
-    float bw_left  = in->bandwidth;
+    int N = in->tile_count;
+    float bw_left = in->bandwidth;
     float cpu_left = 1.0f;
- 
+
     float lambda_eff = 1.5f * (1.0f + in->rho_sys);
- 
-    for (int i = 0; i < N; i++) {
-        cts_tile_t *t    = &out->tiles[i];
-        t->tile_id       = i;
-        t->probability   = in->p_map[i];
+
+    for (int i = 0; i < N; i++)
+    {
+        cts_tile_t *t = &out->tiles[i];
+        t->tile_id = i;
+        t->probability = in->p_map[i];
         t->chosen_version = 0;
-        t->quality_bps   = (float)VIDEO_BIT_RATE[0];
-        t->c_proc        = cts_cproc(0, in->protocol, in->c_proc_global);
-        t->load_cpu      = cts_load_cpu(0, in->protocol);
-        t->net_utility   = 0.0f;
+        t->quality_bps = (float)VIDEO_BIT_RATE[0];
+        t->c_proc = cts_cproc(0, in->protocol, in->c_proc_global);
+        t->load_cpu = cts_load_cpu(0, in->protocol);
+        t->net_utility = 0.0f;
         t->early_terminated = 0;
     }
- 
-    for (int i = 0; i < N; i++) {
-        if (in->p_map[i] < CTS_P_VP_THRESHOLD) continue;
-        float bw_cost  = (float)VIDEO_BIT_RATE[0];
+
+    for (int i = 0; i < N; i++)
+    {
+        if (in->p_map[i] < CTS_P_VP_THRESHOLD)
+            continue;
+        float bw_cost = (float)VIDEO_BIT_RATE[0];
         float cpu_cost = cts_load_cpu(0, in->protocol);
-        if (bw_left >= bw_cost && cpu_left >= cpu_cost) {
-            bw_left  -= bw_cost;
+        if (bw_left >= bw_cost && cpu_left >= cpu_cost)
+        {
+            bw_left -= bw_cost;
             cpu_left -= cpu_cost;
         }
     }
- 
+
     ranked_t *rank = (ranked_t *)malloc(N * sizeof(ranked_t));
-    if (!rank) return RET_FAIL;
-    for (int i = 0; i < N; i++) {
+    if (!rank)
+        return RET_FAIL;
+    for (int i = 0; i < N; i++)
+    {
         float dq = (float)(VIDEO_BIT_RATE[CTS_NUM_QUALITIES - 1] - VIDEO_BIT_RATE[0]);
         float cp = (out->tiles[i].c_proc > 0.0f) ? out->tiles[i].c_proc : 1.0f;
         rank[i].idx = i;
         rank[i].pri = (in->p_map[i] * dq) / cp;
     }
     qsort(rank, N, sizeof(ranked_t), cmp_desc);
- 
-    for (int r = 0; r < N; r++) {
-        int        i   = rank[r].idx;
-        cts_tile_t *t  = &out->tiles[i];
-        int        cur = t->chosen_version;
- 
-        for (int v = cur + 1; v < CTS_NUM_QUALITIES; v++) {
-            float dbw  = (float)(VIDEO_BIT_RATE[v] - VIDEO_BIT_RATE[cur]);
-            float dcpu = cts_load_cpu(v, in->protocol)
-                       - cts_load_cpu(cur, in->protocol);
-            if (dbw > bw_left || dcpu > cpu_left) break;
- 
-            float dq     = (float)(VIDEO_BIT_RATE[v] - VIDEO_BIT_RATE[cur]);
-            float dc     = cts_cproc(v,   in->protocol, in->c_proc_global)
-                         - cts_cproc(cur, in->protocol, in->c_proc_global);
-            float margin = t->probability * dq
-                         - lambda_eff * (1.0f - t->probability) * dc;
-            if (margin <= 0.0f) break;
- 
-            bw_left  -= dbw;
+
+    for (int r = 0; r < N; r++)
+    {
+        int i = rank[r].idx;
+        cts_tile_t *t = &out->tiles[i];
+        int cur = t->chosen_version;
+
+        for (int v = cur + 1; v < CTS_NUM_QUALITIES; v++)
+        {
+            float dbw = (float)(VIDEO_BIT_RATE[v] - VIDEO_BIT_RATE[cur]);
+            float dcpu = cts_load_cpu(v, in->protocol) - cts_load_cpu(cur, in->protocol);
+            if (dbw > bw_left || dcpu > cpu_left)
+                break;
+
+            float dq = (float)(VIDEO_BIT_RATE[v] - VIDEO_BIT_RATE[cur]);
+            float dc = cts_cproc(v, in->protocol, in->c_proc_global) - cts_cproc(cur, in->protocol, in->c_proc_global);
+            float margin = t->probability * dq - lambda_eff * (1.0f - t->probability) * dc;
+            if (margin <= 0.0f)
+                break;
+
+            bw_left -= dbw;
             cpu_left -= dcpu;
-            cur       = v;
+            cur = v;
         }
- 
+
         t->chosen_version = cur;
-        t->quality_bps    = (float)VIDEO_BIT_RATE[cur];
-        t->c_proc         = cts_cproc(cur, in->protocol, in->c_proc_global);
-        t->load_cpu       = cts_load_cpu(cur, in->protocol);
-        t->net_utility    = t->probability * t->quality_bps
-                          - lambda_eff * (1.0f - t->probability) * t->c_proc;
+        t->quality_bps = (float)VIDEO_BIT_RATE[cur];
+        t->c_proc = cts_cproc(cur, in->protocol, in->c_proc_global);
+        t->load_cpu = cts_load_cpu(cur, in->protocol);
+        t->net_utility = t->probability * t->quality_bps - lambda_eff * (1.0f - t->probability) * t->c_proc;
     }
     free(rank);
     return RET_SUCCESS;
@@ -668,265 +686,433 @@ static RET run_greedy(const cts_input_t *in, cts_output_t *out)
 
 static RET run_ra_mpc(const cts_input_t *in, cts_output_t *out)
 {
-    int   N        = in->tile_count;
-    float bw_left  = in->bandwidth;
+    int N = in->tile_count;
+    float bw_left = in->bandwidth;
     float cpu_left = 1.0f;
- 
-    for (int i = 0; i < N; i++) {
-        cts_tile_t *t    = &out->tiles[i];
-        t->tile_id       = i;
-        t->probability   = in->p_map[i];
+
+    for (int i = 0; i < N; i++)
+    {
+        cts_tile_t *t = &out->tiles[i];
+        t->tile_id = i;
+        t->probability = in->p_map[i];
         t->chosen_version = 0;
-        t->quality_bps   = (float)VIDEO_BIT_RATE[0];
-        t->c_proc        = cts_cproc(0, in->protocol, in->c_proc_global);
-        t->load_cpu      = cts_load_cpu(0, in->protocol);
-        t->net_utility   = 0.0f;
+        t->quality_bps = (float)VIDEO_BIT_RATE[0];
+        t->c_proc = cts_cproc(0, in->protocol, in->c_proc_global);
+        t->load_cpu = cts_load_cpu(0, in->protocol);
+        t->net_utility = 0.0f;
         t->early_terminated = 0;
     }
- 
+
     {
-        float base_bw  = (float)VIDEO_BIT_RATE[0] * (float)N;
+        float base_bw = (float)VIDEO_BIT_RATE[0] * (float)N;
         float base_cpu = cts_load_cpu(0, in->protocol) * (float)N;
-        bw_left  -= base_bw;
+        bw_left -= base_bw;
         cpu_left -= base_cpu;
-        if (bw_left  < 0.0f) bw_left  = 0.0f;
-        if (cpu_left < 0.0f) cpu_left = 0.0f;
+        if (bw_left < 0.0f)
+            bw_left = 0.0f;
+        if (cpu_left < 0.0f)
+            cpu_left = 0.0f;
     }
- 
+
     ranked_t *rank = (ranked_t *)malloc(N * sizeof(ranked_t));
-    if (!rank) return RET_FAIL;
-    for (int i = 0; i < N; i++) {
+    if (!rank)
+        return RET_FAIL;
+    for (int i = 0; i < N; i++)
+    {
         rank[i].idx = i;
         rank[i].pri = in->p_map[i];
     }
     qsort(rank, N, sizeof(ranked_t), cmp_desc);
- 
+
     int prev_quality = in->last_quality;
- 
-    for (int r = 0; r < N; r++) {
-        int        i   = rank[r].idx;
-        cts_tile_t *t  = &out->tiles[i];
-        float      p   = t->probability;
- 
+
+    for (int r = 0; r < N; r++)
+    {
+        int i = rank[r].idx;
+        cts_tile_t *t = &out->tiles[i];
+        float p = t->probability;
+
         float best_score = -1e9f;
-        int   best_v     = 0;
- 
-        for (int v = 0; v < CTS_NUM_QUALITIES; v++) {
-            float dbw  = (float)(VIDEO_BIT_RATE[v] - VIDEO_BIT_RATE[0]);
-            float dcpu = cts_load_cpu(v, in->protocol)
-                       - cts_load_cpu(0, in->protocol);
- 
-            if (v > 0 && (dbw > bw_left || dcpu > cpu_left)) continue;
- 
-            float sim_buf   = in->buffer_level;
+        int best_v = 0;
+
+        for (int v = 0; v < CTS_NUM_QUALITIES; v++)
+        {
+            float dbw = (float)(VIDEO_BIT_RATE[v] - VIDEO_BIT_RATE[0]);
+            float dcpu = cts_load_cpu(v, in->protocol) - cts_load_cpu(0, in->protocol);
+
+            if (v > 0 && (dbw > bw_left || dcpu > cpu_left))
+                continue;
+
+            float sim_buf = in->buffer_level;
             float score_sum = 0.0f;
-            int   prev_v    = prev_quality;
- 
-            for (int k = 0; k < CTS_MPC_HORIZON; k++) {
+            int prev_v = prev_quality;
+
+            for (int k = 0; k < CTS_MPC_HORIZON; k++)
+            {
                 float eq = p * (float)VIDEO_BIT_RATE[v] / 1000.0f;
-                float dr = fabsf((float)VIDEO_BIT_RATE[v]
-                                - (float)VIDEO_BIT_RATE[prev_v]) / 1000.0f;
+                float dr = fabsf((float)VIDEO_BIT_RATE[v] - (float)VIDEO_BIT_RATE[prev_v]) / 1000.0f;
                 float avail_bw = in->bandwidth > 0.0f ? in->bandwidth : 1.0f;
-                float dl_time  = (float)VIDEO_BIT_RATE[v] / avail_bw;
+                float dl_time = (float)VIDEO_BIT_RATE[v] / avail_bw;
                 if (sim_buf < dl_time)
                     sim_buf = 0.0f;
                 else
                     sim_buf -= dl_time;
                 sim_buf += SEGMENT_DURATION;
-                if (sim_buf > MAX_BUFFER_SIZE) sim_buf = MAX_BUFFER_SIZE;
- 
+                if (sim_buf > MAX_BUFFER_SIZE)
+                    sim_buf = MAX_BUFFER_SIZE;
+
                 float risk = buf_risk(sim_buf, CTS_MPC_BUF_RISK_LOW);
                 score_sum += eq - CTS_MPC_LAMBDA1 * dr - CTS_MPC_LAMBDA2 * risk;
                 prev_v = v;
             }
- 
-            if (score_sum > best_score) {
+
+            if (score_sum > best_score)
+            {
                 best_score = score_sum;
-                best_v     = v;
+                best_v = v;
             }
         }
- 
-        if (best_v > 0) {
-            float dbw  = (float)(VIDEO_BIT_RATE[best_v] - VIDEO_BIT_RATE[0]);
-            float dcpu = cts_load_cpu(best_v, in->protocol)
-                       - cts_load_cpu(0, in->protocol);
-            bw_left  -= dbw;
+
+        if (best_v > 0)
+        {
+            float dbw = (float)(VIDEO_BIT_RATE[best_v] - VIDEO_BIT_RATE[0]);
+            float dcpu = cts_load_cpu(best_v, in->protocol) - cts_load_cpu(0, in->protocol);
+            bw_left -= dbw;
             cpu_left -= dcpu;
-            if (bw_left  < 0.0f) bw_left  = 0.0f;
-            if (cpu_left < 0.0f) cpu_left = 0.0f;
+            if (bw_left < 0.0f)
+                bw_left = 0.0f;
+            if (cpu_left < 0.0f)
+                cpu_left = 0.0f;
         }
- 
+
         t->chosen_version = best_v;
-        t->quality_bps    = (float)VIDEO_BIT_RATE[best_v];
-        t->c_proc         = cts_cproc(best_v, in->protocol, in->c_proc_global);
-        t->load_cpu       = cts_load_cpu(best_v, in->protocol);
-        t->net_utility    = best_score;
-        prev_quality      = best_v;
+        t->quality_bps = (float)VIDEO_BIT_RATE[best_v];
+        t->c_proc = cts_cproc(best_v, in->protocol, in->c_proc_global);
+        t->load_cpu = cts_load_cpu(best_v, in->protocol);
+        t->net_utility = best_score;
+        prev_quality = best_v;
     }
     free(rank);
     return RET_SUCCESS;
 }
- 
+
 static RET run_slr(const cts_input_t *in, cts_output_t *out, slr_state_t *slr)
 {
-    if (!slr) return RET_FAIL;
- 
-    int   N          = in->tile_count;
-    float ref        = SLR_REF_BITRATE;  /* normalisation reference */
- 
-    /* Per-tile dual decomposition
-     * [BUG-1c FIX] Q(v) normalised → ΔL_i(v) = (p_i − λ)×(Q(v)/ref) − μ×C_proc */
-    for (int i = 0; i < N; i++) {
-        cts_tile_t *t  = &out->tiles[i];
-        t->tile_id     = i;
+    if (!slr)
+        return RET_FAIL;
+
+    int N = in->tile_count;
+    float ref = SLR_REF_BITRATE; /* VIDEO_BIT_RATE[0] = 94712 bps */
+
+    /* 1. Calculate Buffer Slack ONCE outside the loops.
+     * We DO NOT clamp it to 0.0f here, so that healthy buffers
+     * produce a negative slack, allowing gamma to decay. */
+    float buffer_slack_for_update = (CTS_SLR_BUF_RISK_THR - in->buffer_level) / CTS_SLR_BUF_RISK_THR;
+
+    float risk_norm = (buffer_slack_for_update > 0.0f) ? buffer_slack_for_update : 0.0f;
+    /* ── Per-tile dual decomposition ────────────────────────────────────── */
+    for (int i = 0; i < N; i++)
+    {
+        cts_tile_t *t = &out->tiles[i];
+        t->tile_id = i;
         t->probability = in->p_map[i];
         t->early_terminated = 0;
- 
-        float p       = in->p_map[i];
+
+        float p = in->p_map[i];
         float best_dl = -1e30f;
-        int   best_v  = 0;
- 
-        for (int v = 0; v < CTS_NUM_QUALITIES; v++) {
-            float q_norm = (float)VIDEO_BIT_RATE[v] / ref;   /* normalised */
-            float cp     = cts_cproc(v, in->protocol, in->c_proc_global);
- 
-            float dl = (p - slr->lambda) * q_norm - slr->mu * cp;
- 
-            if (dl > best_dl) {
+        int best_v = 0;
+
+        for (int v = 0; v < CTS_NUM_QUALITIES; v++)
+        {
+            /* Chi phí Băng thông */
+            float cost_bw = (float)VIDEO_BIT_RATE[v] / ref;
+
+            /* Giá trị Hữu dụng */
+            float utility = logf(cost_bw + 1.0f);
+
+            /* CPU Norm */
+            float cp_raw = cts_cproc(v, in->protocol, in->c_proc_global);
+            float cp_max = cts_cproc(CTS_NUM_QUALITIES - 1, STREAM_HTTP_3_0, in->c_proc_global);
+            float cp_norm = (cp_max > 0.0f) ? (cp_raw / cp_max) : cp_raw;
+
+            /* L = p*U(v) - λ*C_bw(v) - μ*C_cpu(v) - γ*C_bw(v) */
+            float dl = (p * utility) - (slr->lambda * cost_bw) 
+                        - (slr->mu * cp_norm) - (slr->gamma * risk_norm);
+
+            if (dl > best_dl)
+            {
                 best_dl = dl;
-                best_v  = v;
+                best_v = v;
             }
         }
- 
+
         t->chosen_version = best_v;
-        t->quality_bps    = (float)VIDEO_BIT_RATE[best_v];
-        t->c_proc         = cts_cproc(best_v, in->protocol, in->c_proc_global);
-        t->load_cpu       = cts_load_cpu(best_v, in->protocol);
-        t->net_utility    = best_dl;
+        t->quality_bps = (float)VIDEO_BIT_RATE[best_v];
+        t->c_proc = cts_cproc(best_v, in->protocol, in->c_proc_global);
+        t->load_cpu = cts_load_cpu(best_v, in->protocol);
+        t->net_utility = best_dl;
     }
- 
-    /* Aggregate primal sums */
-    float sum_r   = 0.0f, sum_cpu = 0.0f, sum_pq = 0.0f;
-    for (int i = 0; i < N; i++) {
-        sum_r   += out->tiles[i].quality_bps;
+
+    /* ── Aggregate primal sums ───────────────────────────────────────────── */
+    float sum_r = 0.0f, sum_cpu = 0.0f, sum_pq = 0.0f;
+    for (int i = 0; i < N; i++)
+    {
+        sum_r += out->tiles[i].quality_bps;
         sum_cpu += out->tiles[i].load_cpu;
-        sum_pq  += in->p_map[i] * out->tiles[i].quality_bps;
+
+        float chosen_cost_bw = out->tiles[i].quality_bps / ref;
+        sum_pq += in->p_map[i] * logf(chosen_cost_bw + 1.0f);
     }
- 
-    float risk_val = buf_risk(in->buffer_level, CTS_SLR_BUF_RISK_THR);
- 
-    out->objective_value = sum_pq
-                         - slr->lambda * (sum_r   - in->bandwidth)
-                         - slr->mu     * (sum_cpu - CTS_SLR_TAU_CPU)
-                         - slr->gamma  * risk_val;
- 
-    /* ── [BUG-1b FIX] Subgradient update — normalised ──────────────────
-     *
-     * BW slack: chia cho (N × ref) để đưa về [-5, +5].
-     *   sum_r / (N * ref) = trung bình "bao nhiêu lần ref_bitrate" mỗi tile
-     *   in->bandwidth / (N * ref) = quota per-tile normalised
-     *   slack = avg_quality_ratio - bw_quota_ratio
-     *
-     * CPU slack: đã normalised [0,1], chỉ cần chia cho N để per-tile.
-     *   Không chia thêm vì CTS_SLR_TAU_CPU = 0.75 cũng normalised.
-     *   Nhưng sum_cpu là tổng của N tile load_cpu ∈ [0,1] → chia N.
-     *
-     * Risk: risk_val ∈ [0, CTS_SLR_BUF_RISK_THR = 0.5] → đã nhỏ, ổn.    */
-    float eta = CTS_SLR_STEP;   /* 0.05 */
- 
-    float norm_bw_slack  = (sum_r   - in->bandwidth)   / ((float)N * ref);
+
+    /* Objective value logging (use clamped risk here so objective isn't artificially inflated) */
+    float actual_risk = (buffer_slack_for_update > 0.0f) ? buffer_slack_for_update : 0.0f;
+
+    out->objective_value = sum_pq - slr->lambda * (sum_r - in->bandwidth) / ref - slr->mu * (sum_cpu - CTS_SLR_TAU_CPU * (float)N) - slr->gamma * actual_risk;
+
+    printf("[SLR] λ=%.4f μ=%.4f γ=%.4f  Obj=%.2f  Σr=%.2f Mbps  Σcpu=%.3f\n",
+           slr->lambda, slr->mu, slr->gamma,
+           out->objective_value, sum_r * 8.0f / 1e6f, sum_cpu);
+
+    /* ── Subgradient update ──────────────────────────────────────────────── */
+    float eta = CTS_SLR_STEP;
+
+    float norm_bw_slack = (sum_r - in->bandwidth) / ((float)N * ref);
     float norm_cpu_slack = (sum_cpu - CTS_SLR_TAU_CPU * (float)N) / (float)N;
- 
+
+    /* Multiplier updates - passing the UNCLAMPED buffer_slack so gamma can decay */
     slr->lambda += eta * norm_bw_slack;
-    slr->mu     += eta * norm_cpu_slack;
-    slr->gamma  += eta * risk_val;
- 
-    /* Dual feasibility: non-negative */
-    if (slr->lambda < 0.0f) slr->lambda = 0.0f;
-    if (slr->mu     < 0.0f) slr->mu     = 0.0f;
-    if (slr->gamma  < 0.0f) slr->gamma  = 0.0f;
- 
-    if (slr->lambda > 1.5f)  slr->lambda = 1.5f;
-    if (slr->mu     > 3.0f)  slr->mu     = 3.0f;
-    if (slr->gamma  > 2.0f)  slr->gamma  = 2.0f;
- 
+    slr->mu += eta * norm_cpu_slack;
+    slr->gamma += eta * buffer_slack_for_update;
+
+    /* Apply lower bounds (projection to positive orthant) */
+    if (slr->lambda < 0.0f)
+        slr->lambda = 0.0f;
+    if (slr->mu < 0.0f)
+        slr->mu = 0.0f;
+    if (slr->gamma < 0.0f)
+        slr->gamma = 0.0f;
+
+    /* Apply upper bounds */
+    if (slr->lambda > 1.2f)
+        slr->lambda = 1.2f;
+    if (slr->mu > 1.0f)
+        slr->mu = 1.0f;
+    if (slr->gamma > 2.0f)
+        slr->gamma = 2.0f;
+
     return RET_SUCCESS;
 }
- 
+
+// static RET run_slr(const cts_input_t *in, cts_output_t *out, slr_state_t *slr)
+// {
+//     if (!slr) return RET_FAIL;
+
+//     int   N   = in->tile_count;
+//     float ref = SLR_REF_BITRATE;   /* VIDEO_BIT_RATE[0] = 94712 bps */
+
+//     /* ── Per-tile dual decomposition ────────────────────────────────────── */
+//     for (int i = 0; i < N; i++) {
+//         cts_tile_t *t  = &out->tiles[i];
+//         t->tile_id     = i;
+//         t->probability = in->p_map[i];
+//         t->early_terminated = 0;
+
+//         float p       = in->p_map[i];
+//         float best_dl = -1e30f;
+//         int   best_v  = 0;
+
+//         for (int v = 0; v < CTS_NUM_QUALITIES; v++) {
+//             /* 1. Chi phí Băng thông (Tuyến tính) */
+//             float cost_bw = (float)VIDEO_BIT_RATE[v] / ref;
+
+//             /* 2. Giá trị Hữu dụng (Logarit để tạo đường cong bão hoà)
+//              * Dùng logf(cost_bw + 1.0f) để đảm bảo v=0 thì log=ln(2) không bị âm */
+//             float utility = logf(cost_bw + 1.0f);
+
+//             float cp_raw  = cts_cproc(v, in->protocol, in->c_proc_global);
+//             float cp_max  = cts_cproc(CTS_NUM_QUALITIES - 1, STREAM_HTTP_3_0, in->c_proc_global);
+//             float cp_norm = (cp_max > 0.0f) ? (cp_raw / cp_max) : cp_raw;
+//             float norm_risk_slack = (in->buffer_level < CTS_SLR_BUF_RISK_THR)
+//                       ? ((CTS_SLR_BUF_RISK_THR - in->buffer_level) / CTS_SLR_BUF_RISK_THR)
+//                       : 0.0f;
+//             /* 3. Lagrangian mới: Tách bạch Utility và Cost */
+//             // L = p * U(v) - λ * C_bw(v) - μ * C_cpu(v)
+//             float dl = (p * utility) - (slr->lambda * cost_bw) - (slr->mu * cp_norm) - (slr->gamma * cost_bw);
+
+//             if (dl > best_dl) {
+//                 best_dl = dl;
+//                 best_v  = v;
+//             }
+//         }
+
+//         t->chosen_version = best_v;
+//         t->quality_bps    = (float)VIDEO_BIT_RATE[best_v];
+//         t->c_proc         = cts_cproc(best_v, in->protocol, in->c_proc_global);
+//         t->load_cpu       = cts_load_cpu(best_v, in->protocol);
+//         t->net_utility    = best_dl;
+//     }
+
+//     /* ── Aggregate primal sums ───────────────────────────────────────────── */
+//     // float sum_r   = 0.0f, sum_cpu = 0.0f, sum_pq = 0.0f;
+//     // for (int i = 0; i < N; i++) {
+//     //     sum_r   += out->tiles[i].quality_bps;   /* bps */
+//     //     sum_cpu += out->tiles[i].load_cpu;       /* ∈ [0,1] per tile */
+//     //     sum_pq  += in->p_map[i] * out->tiles[i].quality_bps;
+//     // }
+//     // float actual_risk = (CTS_SLR_BUF_RISK_THR - in->buffer_level) / CTS_SLR_BUF_RISK_THR;
+
+//     float sum_r   = 0.0f, sum_cpu = 0.0f, sum_pq = 0.0f;
+//     for (int i = 0; i < N; i++) {
+//         sum_r   += out->tiles[i].quality_bps;   /* bps */
+//         sum_cpu += out->tiles[i].load_cpu;       /* ∈ [0,1] per tile */
+
+//         float chosen_cost_bw = out->tiles[i].quality_bps / ref;
+//         sum_pq  += in->p_map[i] * logf(chosen_cost_bw + 1.0f);
+//     }
+
+//     // float actual_risk = buf_risk(in->buffer_level, CTS_SLR_BUF_RISK_THR);
+//     // float norm_risk_slack = (CTS_SLR_BUF_RISK_THR - in->buffer_level) / CTS_SLR_BUF_RISK_THR;
+
+//     float norm_risk_slack = (in->buffer_level < CTS_SLR_BUF_RISK_THR)
+//                       ? ((CTS_SLR_BUF_RISK_THR - in->buffer_level) / CTS_SLR_BUF_RISK_THR)
+//                       : 0.0f;
+//     float actual_risk = norm_risk_slack;
+
+//     out->objective_value = sum_pq
+//                          - slr->lambda * (sum_r   - in->bandwidth)
+//                          - slr->mu     * (sum_cpu - CTS_SLR_TAU_CPU * (float)N)
+//                          - slr->gamma  * actual_risk;
+
+//     printf("[SLR] λ=%.4f μ=%.4f  Obj=%.2f  Σr=%.2f Mbps  Σcpu=%.3f\n",
+//            slr->lambda, slr->mu,
+//            out->objective_value, sum_r * 8.0f / 1e6f, sum_cpu);
+
+//     /* ── [FIX-1] Subgradient update — consistent normalisation ──────────
+//      *
+//      * Both slack terms must be dimensionless and O(1) for eta=0.05 to work.
+//      *
+//      * BW slack:  (sum_r − B̂) / (N × ref)
+//      *   sum_r in bps, B̂ = in->bandwidth in bps → difference in bps
+//      *   divide by N×ref to get per-tile normalised slack ∈ [-8, +8]
+//      *
+//      * CPU slack: (sum_cpu − N×τ_CPU) / N
+//      *   sum_cpu = Σ load_cpu_i where each load_cpu ∈ [0,1]
+//      *   N×τ_CPU is the total CPU budget → divide by N for per-tile slack ∈ [-1,1]
+//      *
+//      * [FIX-2] in->bandwidth is the TOTAL budget for ALL N tiles (bps).
+//      *   Do NOT compare avg_r against total bandwidth.               */
+//     float eta = CTS_SLR_STEP;
+
+//     float norm_bw_slack  = (sum_r - in->bandwidth) / ((float)N * ref);
+//     float norm_cpu_slack = (sum_cpu - CTS_SLR_TAU_CPU * (float)N) / (float)N;
+
+//     slr->lambda += eta * norm_bw_slack;
+//     slr->mu     += eta * norm_cpu_slack;
+//     slr->gamma  += eta * actual_risk;
+
+//     if (slr->lambda < 0.0f) slr->lambda = 0.0f;
+//     if (slr->mu     < 0.0f) slr->mu     = 0.0f;
+//     if (slr->gamma  < 0.0f) slr->gamma  = 0.0f;
+
+//     /* [FIX-3] Lower caps now that cp_norm is ∈[0,1]:
+//      *   lambda cap: just above 1.0 so it can suppress p_i=1.0 VP tiles
+//      *               when truly over budget, but not run away.
+//      *   mu cap:     1.0 is enough since cp_norm ≤ 1.0                 */
+//     if (slr->lambda > 1.2f) slr->lambda = 1.2f;
+//     if (slr->mu     > 1.0f) slr->mu     = 1.0f;
+//     if (slr->gamma  > 2.0f) slr->gamma  = 2.0f;
+
+//     return RET_SUCCESS;
+// }
+
 /* ── aggregate_output ──────────────────────────────────────────────────── */
 static void aggregate_output(const cts_input_t *in, cts_output_t *out,
                              float saved_obj)
 {
-    float sum_bw  = 0.0f, sum_cpu = 0.0f, sum_util = 0.0f;
-    float vp_q    = 0.0f;
-    int   vp_cnt  = 0;
- 
-    for (int i = 0; i < out->tile_count; i++) {
+    float sum_bw = 0.0f, sum_cpu = 0.0f, sum_util = 0.0f;
+    float vp_q = 0.0f;
+    int vp_cnt = 0;
+
+    for (int i = 0; i < out->tile_count; i++)
+    {
         cts_tile_t *t = &out->tiles[i];
-        if (t->chosen_version < 0) t->chosen_version = 0;
- 
+        if (t->chosen_version < 0)
+            t->chosen_version = 0;
+
         t->quality_bps = (float)VIDEO_BIT_RATE[t->chosen_version];
-        t->c_proc      = cts_cproc(t->chosen_version, in->protocol,
-                                   in->c_proc_global);
-        t->load_cpu    = cts_load_cpu(t->chosen_version, in->protocol);
- 
-        sum_bw  += t->quality_bps;
+        t->c_proc = cts_cproc(t->chosen_version, in->protocol,
+                              in->c_proc_global);
+        t->load_cpu = cts_load_cpu(t->chosen_version, in->protocol);
+
+        sum_bw += t->quality_bps;
         sum_cpu += t->load_cpu;
         sum_util += t->net_utility;
- 
-        if (in->p_map[i] >= CTS_P_VP_THRESHOLD) {
+
+        if (in->p_map[i] >= CTS_P_VP_THRESHOLD)
+        {
             vp_q += t->quality_bps;
             vp_cnt++;
         }
     }
- 
-    out->total_bw_used  = sum_bw;
+
+    out->total_bw_used = sum_bw;
     out->total_cpu_load = sum_cpu;
     out->vp_avg_quality = (vp_cnt > 0) ? (vp_q / (float)vp_cnt) : 0.0f;
     out->objective_value = (saved_obj != 0.0f) ? saved_obj : sum_util;
 }
- 
+
 /* ── main dispatch ─────────────────────────────────────────────────────── */
-RET cts_schedule(CTS_ALGORITHM      algo,
+RET cts_schedule(CTS_ALGORITHM algo,
                  const cts_input_t *in,
-                 cts_output_t      *out,
-                 slr_state_t       *slr)
+                 cts_output_t *out,
+                 slr_state_t *slr)
 {
     if (!in || !out || !out->tiles || !in->p_map || in->tile_count <= 0)
         return RET_FAIL;
- 
-    out->tile_count      = in->tile_count;
+
+    out->tile_count = in->tile_count;
     out->objective_value = 0.0f;
- 
+
     RET ret;
-    switch (algo) {
-    case SCHEDULER_GREEDY:  ret = run_greedy(in, out);       break;
-    case SCHEDULER_RA_MPC:  ret = run_ra_mpc(in, out);       break;
-    case SCHEDULER_SLR:     ret = run_slr(in, out, slr);     break;
-    default:                return RET_FAIL;
+    switch (algo)
+    {
+    case SCHEDULER_GREEDY:
+        ret = run_greedy(in, out);
+        break;
+    case SCHEDULER_RA_MPC:
+        ret = run_ra_mpc(in, out);
+        break;
+    case SCHEDULER_SLR:
+        ret = run_slr(in, out, slr);
+        break;
+    default:
+        return RET_FAIL;
     }
-    if (ret != RET_SUCCESS) return RET_FAIL;
- 
+    if (ret != RET_SUCCESS)
+        return RET_FAIL;
+
     float saved_obj = out->objective_value;
     aggregate_output(in, out, saved_obj);
     return RET_SUCCESS;
 }
- 
+
 /* ── debug print ───────────────────────────────────────────────────────── */
 void cts_print_schedule(const cts_output_t *out, CTS_ALGORITHM algo)
 {
-    if (!out || !out->tiles) return;
-    const char *name = (algo == SCHEDULER_RA_MPC) ? "RA-MPC" :
-                       (algo == SCHEDULER_SLR)    ? "SLR"    : "GREEDY";
+    if (!out || !out->tiles)
+        return;
+    const char *name = (algo == SCHEDULER_RA_MPC) ? "RA-MPC" : (algo == SCHEDULER_SLR) ? "SLR"
+                                                                                       : "GREEDY";
     printf("\n[CTS/%s] J=%.2f  BW=%.2f Mbps  CPU=%.3f  VP_avg=%.0f bps\n",
            name, out->objective_value,
            out->total_bw_used / 1e6f,
            out->total_cpu_load, out->vp_avg_quality);
     printf("  %-6s %-5s %-4s %-10s %-8s\n",
-           "Tile","p_i","Ver","Qual(bps)","Utility");
+           "Tile", "p_i", "Ver", "Qual(bps)", "Utility");
     printf("  %-6s %-5s %-4s %-10s %-8s\n",
-           "------","-----","----","----------","--------");
-    for (int i = 0; i < out->tile_count; i++) {
+           "------", "-----", "----", "----------", "--------");
+    for (int i = 0; i < out->tile_count; i++)
+    {
         const cts_tile_t *t = &out->tiles[i];
         printf("  %-6d %-5.3f %-4d %-10.0f %-8.2f%s\n",
                t->tile_id, t->probability, t->chosen_version,

@@ -36,7 +36,7 @@ typedef enum
 #define HISTORY_SIZE      100
 #define PREDICTION_WINDOW 3
 
-#define MAX_BUFFER_SIZE   4.0f
+#define MAX_BUFFER_SIZE   10.0f
 #define STEP              0.01f
 #define SEGMENT_DURATION  1.0f
 #define B_MIN             1.0f
