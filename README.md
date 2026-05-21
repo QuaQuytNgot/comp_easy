@@ -92,6 +92,12 @@ To start the streaming simulation:
 ```bash
 ./buid/my_program
 ```
+or 
+```bash
+cd run_client/
+python3 run.py <log file> -- ./build_slr/my_program
+```
+NOTE: you should change your interface and port server host in run.py. The log file should same format as sample log files (uploaded inside run_client/). 
 
 *During execution, the system will output detailed logs to the terminal:*
 * `[RM]`: CPU resource status (`rho_sys`, `C_proc`).
