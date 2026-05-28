@@ -17,7 +17,7 @@
 //   count_time_t avg_pretransfer_time;   // Ready to transfer (cumulative)
 //   count_time_t avg_starttransfer_time; // TTFB (cumulative)
 //   count_time_t avg_total_time;         // Total time (cumulative)
-  
+
 //   count_time_t total_namelookup_time;
 //   count_time_t total_connect_time;
 //   count_time_t total_appconnect_time;
@@ -39,7 +39,7 @@
 //   int num_connections_reused;
 //   int total_redirects;
 //   double avg_redirect_time_ms;
-  
+
 //   // Variability
 //   double jitter_ms;
 
@@ -134,35 +134,35 @@ typedef struct
     count_time_t total_starttransfer_time;
     count_time_t total_time;
 
-    bw_t   avg_download_speed;
-    bw_t   min_download_speed;
-    bw_t   max_download_speed;
+    bw_t avg_download_speed;
+    bw_t min_download_speed;
+    bw_t max_download_speed;
 
     size_t total_size;
     size_t avg_size;
     size_t avg_header_size;
 
-    int    num_connections_reused;
-    int    total_redirects;
+    int num_connections_reused;
+    int total_redirects;
     double avg_redirect_time_ms;
     double jitter_ms;
 } tile_group_stats_t;
 
 typedef struct request_handler_v2_t
 {
-    char  *ser_addr;
-    COUNT  seg_count;
-    COUNT  tile_count;
-    COUNT  version_count;
+    char *ser_addr;
+    COUNT seg_count;
+    COUNT tile_count;
+    COUNT version_count;
 
     http_pool_t *pool;
-    int          max_parallel_downloads;
+    int max_parallel_downloads;
 
     /* per-tile metric arrays (one entry per tile_id) — unchanged */
-    buffer_t     *data;
-    bw_t         *dls;
-    count_t      *redirect_count;
-    size_t       *header_size;
+    buffer_t *data;
+    bw_t *dls;
+    count_t *redirect_count;
+    size_t *header_size;
     count_time_t *redirect_time;
     count_time_t *cnnt;
     count_time_t *pre_trans_time;
@@ -171,7 +171,7 @@ typedef struct request_handler_v2_t
     count_time_t *size_dl;
     count_time_t *namelookup_time;
     count_time_t *appconnect_time;
-    int          *connection_reused;
+    int *connection_reused;
 
     /* ── new fields for stochastic scheduling ──────────────────────────── */
 
@@ -179,7 +179,7 @@ typedef struct request_handler_v2_t
      * Updated each segment by request_handler_v2_update_pmap().
      * Each download_task_t.prob_ptr points here so http_pool can perform
      * early termination in real time during the download. */
-    float        *p_map;
+    float *p_map;
 
     /* Pointer to the CTS scheduler output for the current segment.
      * When non-NULL, chosen_version comes from cts_out->tiles[tile_id]
@@ -192,29 +192,38 @@ typedef struct request_handler_v2_t
 } request_handler_v2_t;
 
 RET request_handler_v2_init(request_handler_v2_t *self,
-                            const char           *ser_adrr,
-                            COUNT                 seg_count,
-                            COUNT                 version_count,
-                            COUNT                 tile_count,
-                            HTTP_VERSION          protocol,
-                            int                   max_parallel_downloads);
+                            const char *ser_adrr,
+                            COUNT seg_count,
+                            COUNT version_count,
+                            COUNT tile_count,
+                            HTTP_VERSION protocol,
+                            int max_parallel_downloads);
 
 /* Push a fresh probability array into self->p_map */
 RET request_handler_v2_update_pmap(request_handler_v2_t *self,
-                                   const float          *p_map_src);
+                                   const float *p_map_src);
 
 static bool is_tile_in_actual_viewport(int tile_id, float actual_yaw, float actual_pitch);
 
 /* chosen_versions[] is used only when self->cts_out == NULL */
 RET request_handler_v2_post_get_info(request_handler_v2_t *self,
-                                     COUNT                  chunk_id,
-                                     int                   *vp_tiles,
-                                     int                    num_vp_tiles,
-                                     int                   *chosen_versions,
-                                     float                  actual_yaw,   
-                                     float                  actual_pitch,
-                                     HTTP_VERSION           protocol,
-                                     resource_monitor_t    *rm);
+                                     COUNT chunk_id,
+                                     int *vp_tiles,
+                                     int num_vp_tiles,
+                                     int *chosen_versions,
+                                     float actual_yaw,
+                                     float actual_pitch,
+                                     HTTP_VERSION protocol,
+                                     resource_monitor_t *rm);
+
+RET request_handler_v2_post_get_info_no_rm(request_handler_v2_t *self,
+                                           COUNT chunk_id,
+                                           int *vp_tiles,
+                                           int num_vp_tiles,
+                                           int *chosen_versions,
+                                           float actual_yaw,
+                                           float actual_pitch,
+                                           HTTP_VERSION protocol);
 
 RET request_handler_v2_reset(request_handler_v2_t *self);
 RET request_handler_v2_destroy(request_handler_v2_t *self);
