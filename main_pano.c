@@ -1,62 +1,74 @@
 /*
- * Demonstrates all three scheduling algorithms side-by-side.
- * Change ACTIVE_ALGORITHM to switch between them at compile time:
+ * Demonstrates the Pano 360-degree video scheduling algorithm.
  *
- *   SCHEDULER_GREEDY  — baseline priority-greedy
- *   SCHEDULER_RA_MPC  — Risk-Aware MPC (minimises stalls over H-step horizon)
- *   SCHEDULER_SLR     — Stochastic Lagrangian Relaxation (adapts λ/μ/γ per seg)
- *
- * CTS Runtime Logic (Section V-D):
- *   1. resource_monitor_update()     → Δutime, Δstime, ρ_sys, C_proc
- *   2. vpes_legr()                   → predicted (yaw, pitch)
- *   3. build_probability_map()       → p_i(t) for all tiles
- *   4. cts_schedule()                → per-tile quality r_i via chosen algo
- *   5. request_handler_v2_post_get_info()
- *        • jobs[i].prob_ptr = &p_map[tile_id]
- *        • http_pool polling loop checks *prob_ptr < tau → RESET_STREAM
- *   6. SLR multiplier update is done inside run_slr() automatically.
- *
- * Cross-layer mapping:
- *   ρ_sys (CPU uncertainty)  ↔  Viewport uncertainty → drives λ_eff / μ
- *   Quality level change     ↔  DVS/DVFS step
- *   RESET_STREAM             ↔  Reclaim μ (CPU resource multiplier)
+ * Pano Optimization Logic (SIGCOMM '19):
+ * - Focuses strictly on maximizing perceived quality (augmented PSPNR) 
+ * bounded by a strict network bandwidth constraint.
+ * - Introduces 360JND (Just-Noticeable Difference) multipliers based on:
+ * 1. Viewpoint moving speed (deg/s)
+ * 2. Scene luminance change (Not simulated in this trace)
+ * 3. Depth-of-Field difference (Not simulated in this trace)
+ * - Bypasses CPU load metrics and early-termination recovery heuristics.
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include <time.h>       /* clock_gettime — FIX BUG-2 */
+#include <time.h>       
 
 #include "proto_comp/define.h"
 #include "proto_comp/abr.h"
 #include "proto_comp/viewport_prediction.h"
 #include "proto_comp/request_handler_v2.h"
 #include "proto_comp/cts_scheduler.h"
-#include "proto_comp/resource_monitor.h"
 #include "proto_comp/metrics_logger.h"
-#include "proto_comp/metric_evaluator.h"
 
 /* ── configuration ──────────────────────────────────────────────────────── */
 #define SERVER_ADDR              "https://192.168.101.17:8443"
 #define TOTAL_SEGMENTS           10
 #define VP_HISTORY_SZ            20
 #define PROTOCOL                 STREAM_HTTP_3_0
-#define TAU_EARLY_TERM           0.10f
-#define RHO_SYS_WARN             0.80f
+#define TAU_EARLY_TERM           0.00f  /* ĐÃ SỬA: Tắt ET từ lúc khởi tạo */
 #define VP_HALF_YAW              (VIEWPORT_WIDTH_DEGREES  / 2.0f)
 #define VP_HALF_PITCH            (VIEWPORT_HEIGHT_DEGREES / 2.0f)
 #define SACCADE_THRESHOLD_DEG_S  30.0f
-#define ACTIVE_ALGORITHM         SCHEDULER_SLR
+#define ACTIVE_ALGORITHM         SCHEDULER_SALIENTVR
 
-#define BW_INIT_BITS_S           35000000.0f    /* 10 Mbps */
+/* Bandwidth initialized in bits/s to match VIDEO_BIT_RATE[] */
+#define BW_INIT_BITS_S           35000000.0f    /* 0.5 Mbps */
+
+/* NEW CODE: Bộ lọc Viewport thực tế hiển thị trên màn hình (~6 Tiles) */
+static int filter_actual_viewport_tiles(float yaw, float pitch, const int *predicted_vp, int n_pred, int *filtered_vp)
+{
+    float ny = wrap_angle_360(yaw);
+    float np = clamp_pitch(pitch);
+    int k = 0;
+
+    for (int i = 0; i < n_pred; i++) {
+        int tid = predicted_vp[i];
+        int col = tid % NO_OF_COLS;
+        int row = tid / NO_OF_COLS;
+        
+        float ty     = (col + 0.5f) * TILE_WIDTH;
+        float tp     = -90.0f + (row + 0.5f) * TILE_HEIGHT;
+        float dy_raw = fabsf(ny - ty);
+        float dy     = (dy_raw > 180.0f) ? (360.0f - dy_raw) : dy_raw;
+        float dp     = fabsf(np - tp);
+
+        /* Chỉ giữ lại các tile thực sự nằm trong khung hình của kính VR */
+        if (dy <= VP_HALF_YAW && dp <= VP_HALF_PITCH) {
+            filtered_vp[k++] = tid;
+        }
+    }
+    return k;
+}
 
 /* ── QoE constants ──────────────────────────────────────────────────────── */
 #define MAX_TILE_BITRATE_KBPS    2000.0f
 #define MAX_REBUFFER_S           5.0f
 #define MAX_SMOOTHNESS_KBPS      1000.0f
 
-/* [BUG-4 FIX] Signature mới: nhận rebuffer_s trực tiếp, không tự tính lại */
 static float calculate_qoe(float avg_tile_bitrate_kbps,
                             float rebuffer_s,
                             float smoothness_kbps)
@@ -122,35 +134,6 @@ static int build_vp_list(const float *p, int n, int *vp, float thr)
     return k;
 }
 
-/* ── Strict 90×90° viewport tile extractor ─────────────────────────────
- * Trích xuất chính xác các tile có TÂM nằm trong vùng 90×90° (half-extents
- * 45° yaw + 45° pitch) quanh điểm nhìn (yaw, pitch).
- * Dùng khoảng cách tròn cho yaw để xử lý đường nối 0°/360°.
- * Trả về số tile thoả điều kiện; mảng kết quả lưu vào vp_array[].
- * ----------------------------------------------------------------------- */
-static int get_strict_vp_tiles(float yaw, float pitch, int *vp_array)
-{
-    float ny = wrap_angle_360(yaw);
-    float np = clamp_pitch(pitch);
-    int   k  = 0;
-
-    for (int i = 0; i < NO_OF_ROWS * NO_OF_COLS; i++) {
-        int   col    = i % NO_OF_COLS;
-        int   row    = i / NO_OF_COLS;
-        float ty     = (col + 0.5f) * TILE_WIDTH;
-        float tp     = -90.0f + (row + 0.5f) * TILE_HEIGHT;
-
-        float dy_raw = fabsf(ny - ty);
-        float dy     = (dy_raw > 180.0f) ? (360.0f - dy_raw) : dy_raw;
-        float dp     = fabsf(np - tp);
-
-        /* VP_HALF_YAW = 45°, VP_HALF_PITCH = 45° — strict 90×90° */
-        if (dy <= VP_HALF_YAW && dp <= VP_HALF_PITCH)
-            vp_array[k++] = i;
-    }
-    return k;
-}
-
 /* ── harmonic bandwidth estimator (bits/s) ─────────────────────────────── */
 #define BW_HIST 3
 static float harmonic_bw(float *h, int n)
@@ -160,7 +143,7 @@ static float harmonic_bw(float *h, int n)
     return (s > 0.0f && c > 0) ? ((float)c / s) : BW_INIT_BITS_S;
 }
 
-/* ── [BUG-2 FIX] Wall-clock timer ──────────────────────────────────────── */
+/* ── Wall-clock timer ──────────────────────────────────────── */
 static double now_seconds(void)
 {
     struct timespec ts;
@@ -171,24 +154,13 @@ static double now_seconds(void)
 /* ── main ───────────────────────────────────────────────────────────────── */
 int main(void)
 {
-    const char *algo_name =
-        (ACTIVE_ALGORITHM == SCHEDULER_RA_MPC) ? "RA-MPC" :
-        (ACTIVE_ALGORITHM == SCHEDULER_SLR)    ? "SLR"    : "GREEDY";
-
+    const char *algo_name = "PANO";
     printf("=== CTS Streaming Demo  Algorithm: %s ===\n\n", algo_name);
 
     float total_qoe_score      = 0.0f;
     float prev_vp_bitrate_kbps = 0.0f;
 
-    /* 1. Resource monitor */
-    resource_monitor_t rm;
-    if (resource_monitor_init(&rm) != RET_SUCCESS) {
-        fprintf(stderr, "[main] resource_monitor_init failed\n");
-        return EXIT_FAILURE;
-    }
-    printf("[INIT] Resource monitor OK\n");
-
-    /* 2. Viewport predictor */
+    /* 1. Viewport predictor */
     float yaw_h[VP_HISTORY_SZ], pit_h[VP_HISTORY_SZ];
     int   ts[VP_HISTORY_SZ];
     for (int i = 0; i < VP_HISTORY_SZ; i++) {
@@ -203,7 +175,7 @@ int main(void)
     }
     printf("[INIT] Viewport predictor OK\n");
 
-    /* 3. Request handler */
+    /* 2. Request handler */
     int tile_count = NO_OF_ROWS * NO_OF_COLS;  /* 6 × 8 = 48 */
     request_handler_v2_t rh;
     if (request_handler_v2_init(&rh, SERVER_ADDR, TOTAL_SEGMENTS,
@@ -215,20 +187,14 @@ int main(void)
     rh.pool->early_term_tau = TAU_EARLY_TERM;
     printf("[INIT] Request handler OK (tau=%.2f)\n", TAU_EARLY_TERM);
 
-    /* 4. Scheduler structures */
+    /* 3. Scheduler structures */
     cts_tile_t *tiles = (cts_tile_t *)calloc(tile_count, sizeof(cts_tile_t));
     if (!tiles) { request_handler_v2_destroy(&rh); return EXIT_FAILURE; }
 
     cts_output_t sched_out = { .tiles = tiles, .tile_count = tile_count };
-    slr_state_t  slr_state;
-    slr_state_init(&slr_state);
 
     float p_map[NO_OF_ROWS * NO_OF_COLS];
-    int   vp_tiles[NO_OF_ROWS * NO_OF_COLS];   /* tiles có p_i >= 0.15 (dùng cho SLR/scheduler) */
-    int   strict_vp_tiles[NO_OF_ROWS * NO_OF_COLS]; /* tiles lõi 90×90° — Two-Stage Stage 1 */
-    int   n_strict_vp = 0;
-    int   strict_vp_actual[NO_OF_ROWS * NO_OF_COLS]; /* 90×90° theo góc THỰC TẾ — dùng cho metrics */
-    int   n_strict_vp_actual = 0;
+    int   vp_tiles[NO_OF_ROWS * NO_OF_COLS];
 
     float bw_hist[BW_HIST] = { BW_INIT_BITS_S, BW_INIT_BITS_S, BW_INIT_BITS_S };
     int   bw_idx    = 0;
@@ -243,15 +209,11 @@ int main(void)
 
     /* Metrics logger */
     metrics_logger_t m_logger;
-    const char *log_filename = (ACTIVE_ALGORITHM == SCHEDULER_SLR)
-                               ? "slr_metrics.csv" : "baseline_metrics.csv";
+    const char *log_filename = "pano_metrics.csv";
     if (metrics_logger_init(&m_logger, log_filename) != 0)
         return EXIT_FAILURE;
 
-    metric_tracker_t my_metrics;
-    metric_tracker_init(&my_metrics);
     int chosen_bitrate_all[TOTAL_SEGMENTS];
-
     /* ════════════════════════════════════════════════════════════════════
      * SEGMENT LOOP
      * ════════════════════════════════════════════════════════════════════ */
@@ -264,21 +226,14 @@ int main(void)
         float actual_pitch = viewport_dataset[data_idx].pitch;
         int   actual_ts_ms = viewport_dataset[data_idx].timestamp;
 
-        /* Step A: resource */
-        resource_monitor_update(&rm);
-        float rho   = get_system_status(&rm);
-        float cproc = resource_monitor_get_cproc(&rm);
-        printf("[RM] rho_sys=%.4f  C_proc=%.1f%s\n",
-               rho, cproc, (rho > RHO_SYS_WARN) ? "  [HIGH]" : "");
-
-        /* Step B: viewport prediction */
+        /* Step A: Viewport prediction */
         float pred_yaw = 180.0f, pred_pit = 0.0f;
         if (vpes.vpes_post(&vpes, &pred_yaw, &pred_pit) == RET_SUCCESS)
             printf("[VP] pred yaw=%.1f°  pitch=%.1f°\n", pred_yaw, pred_pit);
         else
             printf("[VP] prediction failed — using last centre\n");
 
-        /* Adaptive sigma & tau */
+        /* Calculate Viewport Velocity (Critical for Pano 360JND) */
         float dt_s      = (actual_ts_ms > prev_ts_ms)
                           ? (actual_ts_ms - prev_ts_ms) / 1000.0f : 1.0f;
         float d_yaw_raw = fabsf(pred_yaw - prev_pred_yaw);
@@ -289,172 +244,118 @@ int main(void)
                                ? (VIEWPORT_WIDTH_DEGREES * 0.5f)
                                : (VIEWPORT_WIDTH_DEGREES * 0.3f);
 
-        float diff_y_raw = fabsf(pred_yaw - actual_yaw);
-        float diff_y     = (diff_y_raw > 180.0f) ? (360.0f - diff_y_raw) : diff_y_raw;
-        float pred_err   = sqrtf(diff_y * diff_y +
-                                 fabsf(pred_pit - actual_pitch) *
-                                 fabsf(pred_pit - actual_pitch));
+        /* VÔ HIỆU HÓA EARLY TERMINATION (ET) ĐỂ ĐÁNH GIÁ CÔNG BẰNG VỚI MOSAIC */
+        rh.pool->early_term_tau = 0.0f;
+        
+        printf("[TAU] velocity=%.1f°/s  sigma=%.1f°  tau=0.000 (Disabled)\n",
+               velocity, adaptive_sigma);
 
-        float tau_base     = expf(-(pred_err * pred_err)
-                                   / (2.0f * adaptive_sigma * adaptive_sigma));
-        float tau_resource = 1.0f + 0.05f * slr_state.mu + 0.01f * slr_state.lambda;
-        float tau_final    = tau_base * tau_resource;
-        if (tau_final < 0.02f) tau_final = 0.02f;
-        if (tau_final > 0.35f) tau_final = 0.35f;
-        if (velocity > SACCADE_THRESHOLD_DEG_S) {
-            tau_final = 0.0f;
-            printf("[TAU] Saccade detected (%.1f°/s) — tau=0\n", velocity);
-        }
-        if (seg < 3) tau_final = 0.0f;
-
-        rh.pool->early_term_tau = tau_final;
-        printf("[TAU] velocity=%.1f°/s  sigma=%.1f°  tau=%.3f\n",
-               velocity, adaptive_sigma, tau_final);
-
-        /* Step C: probability map */
+        /* Step B: Probability map */
         build_pmap_adaptive(pred_yaw, pred_pit, p_map, tile_count, adaptive_sigma);
         request_handler_v2_update_pmap(&rh, p_map);
         int nvp = build_vp_list(p_map, tile_count, vp_tiles, 0.15f);
-        printf("[PM] %d viewport tiles (p>=0.15)\n", nvp);
+        printf("[PM] %d viewport tiles\n", nvp);
 
-        /* Two-Stage: trích xuất core tiles 90×90° từ góc DỰ ĐOÁN */
-        n_strict_vp = get_strict_vp_tiles(pred_yaw, pred_pit, strict_vp_tiles);
-        printf("[PM] %d strict-VP tiles (90x90, predicted)\n", n_strict_vp);
-
-        /* Step D: bandwidth estimate (bits/s) */
-        float bw = harmonic_bw(bw_hist, BW_HIST) *1.0f;
+        /* Step C: Bandwidth estimate (bits/s) */
+        float bw = harmonic_bw(bw_hist, BW_HIST) * 0.90f;
         printf("[BW] est %.2f Mbps\n", bw / 1e6f);
 
-        // bw = 15000000.0f;
-
-        /* Step E: CTS scheduling */
+        /* Step D: CTS scheduling (PANO) */
         cts_input_t cin;
         cts_input_init(&cin);
-        cin.p_map         = p_map;
-        cin.tile_count    = tile_count;
-        cin.bandwidth     = bw;           /* bits/s */
-        cin.buffer_level  = buf_level;
-        cin.protocol      = PROTOCOL;
-        cin.rho_sys       = rho;
-        cin.c_proc_global = cproc;
-        cin.last_quality  = last_q;
+        cin.p_map                 = p_map;
+        cin.tile_count            = tile_count;
+        cin.bandwidth             = bw;           /* bits/s */
+        cin.buffer_level          = buf_level;
+        cin.protocol              = PROTOCOL;
+        cin.last_quality          = last_q;
+        
+        /* Pano-specific inputs */
+        cin.viewpoint_speed_deg_s = velocity; 
+        cin.tile_lum_change       = NULL; /* Missing from trace dataset */
+        cin.tile_dof_diff         = NULL; /* Missing from trace dataset */
 
         memset(&sched_out, 0, sizeof(sched_out));
         sched_out.tiles      = tiles;
         sched_out.tile_count = tile_count;
 
-        if (cts_schedule(ACTIVE_ALGORITHM, &cin, &sched_out,
-                         (ACTIVE_ALGORITHM == SCHEDULER_SLR) ? &slr_state : NULL)
-            != RET_SUCCESS) {
+        if (cts_schedule(ACTIVE_ALGORITHM, &cin, &sched_out, NULL) != RET_SUCCESS) {
             fprintf(stderr, "[main] cts_schedule failed\n");
             break;
         }
+        
+        cts_print_schedule(&sched_out, ACTIVE_ALGORITHM);
 
-        update_metrics(&cin, &sched_out, &my_metrics);
-
-        printf("[%s] J=%.2f  BW=%.2f Mbps  CPU=%.3f  VP_avg=%.0f bps\n",
+        printf("[%s] J=%.2f  BW=%.2f Mbps  VP_avg=%.0f bps\n",
                algo_name, sched_out.objective_value,
                sched_out.total_bw_used / 1e6f,
-               sched_out.total_cpu_load, sched_out.vp_avg_quality);
-
-        if (ACTIVE_ALGORITHM == SCHEDULER_SLR)
-            printf("[SLR] λ=%.3f  μ=%.3f  γ=%.3f\n",
-                   slr_state.lambda, slr_state.mu, slr_state.gamma);
+               sched_out.vp_avg_quality);
 
         if (nvp > 0) last_q = sched_out.tiles[vp_tiles[0]].chosen_version;
         
         chosen_bitrate_all[seg] = last_q;
-        printf("[VP QUALITIES] ");
-        for (int i = 0; i < nvp; i++) {
-            int tid = vp_tiles[i];
-            int version = sched_out.tiles[tid].chosen_version;
-            
-            // Bạn có thể in nguyên version (V0, V1...)
-            printf("T%d:V%d ", tid, version);
-            
-            // HOẶC nếu muốn in cả Kbps ra cho rõ ràng thì dùng dòng này:
-            // float kbps = sched_out.tiles[tid].quality_bps / 1000.0f;
-            // printf("T%d:V%d(%.0f) ", tid, version, kbps);
-        }
-        printf("\n");
-        /* ========================================================== */
-
-        /* ── Step F: Download */
+        /* ── Step E: Download ────────────────────────────────────────────── */
         rh.cts_out = &sched_out;
-
         double t_start = now_seconds();
 
-        /* Two-Stage Dispatch:
-         *   Stage 1 = strict_vp_tiles  (90×90° dự đoán, HIGH PRIORITY, không ET)
-         *   Stage 2 = các tile còn lại có p_i > 0  (từ vp_tiles), áp dụng ET
-         * Truyền strict_vp_tiles làm "core" vào request handler. */
-        if (request_handler_v2_post_get_info_two_stage(&rh, seg,
-                                             strict_vp_tiles, n_strict_vp,
-                                             vp_tiles, nvp,
-                                             NULL, actual_yaw, actual_pitch,
-                                             PROTOCOL) != RET_SUCCESS)
+        /* Uses no-RM version to bypass stripped resource_monitor dependency */
+        if (request_handler_v2_post_get_info_no_rm(&rh, seg, vp_tiles, nvp,
+                                                   NULL, actual_yaw, actual_pitch,
+                                                   PROTOCOL) != RET_SUCCESS) {
             fprintf(stderr, "[main] download seg %llu failed\n", seg+1);
+        }
 
         double t_end = now_seconds();
 
         float actual_wall_dl_s = (float)(t_end - t_start);
         if (actual_wall_dl_s < 1e-4f) actual_wall_dl_s = 0.001f;  /* fallback */
 
-        /* ── Step G: BW & metrics ────────────────────────────*/
-        float tot_bytes           = 0.0f;
-        float current_vp_kbps_sum = 0.0f;
-
+        /* ── Step F: BW & Metrics ────────────────────────────────────────── */
+        float tot_bytes = 0.0f;
         for (int i = 0; i < tile_count; i++) {
             tot_bytes += (float)rh.size_dl[i];
         }
 
-        /* Tính QoE công bằng: CHỈ dùng tiles thực sự trong 90×90° THỰC TẾ */
-        n_strict_vp_actual = get_strict_vp_tiles(actual_yaw, actual_pitch,
-                                                  strict_vp_actual);
-        for (int i = 0; i < n_strict_vp_actual; i++) {
-            int tid = strict_vp_actual[i];
+        /* LỌC RA ĐÚNG ~6 TILE THỰC TẾ TRONG TẦM MẮT ĐỂ CHẤM ĐIỂM QOE */
+        int playback_vp_tiles[NO_OF_ROWS * NO_OF_COLS];
+        int n_playback_vp = filter_actual_viewport_tiles(actual_yaw, actual_pitch, vp_tiles, nvp, playback_vp_tiles);
+
+        float current_vp_kbps_sum = 0.0f;
+        for (int i = 0; i < n_playback_vp; i++) {
+            int tid = playback_vp_tiles[i];
             current_vp_kbps_sum += ((float)rh.size_dl[tid] * 8.0f) / 1000.0f;
         }
-        printf("[METRICS] Strict-VP actual: %d tiles, bitrate sum=%.1f Kbps\n",
-               n_strict_vp_actual, current_vp_kbps_sum);
-        float current_avg_tile_kbps = (n_strict_vp_actual > 0)
-                                      ? (current_vp_kbps_sum / (float)n_strict_vp_actual)
-                                      : 0.0f;
 
-        /* meas_bw = total bits / real wall-clock time (bits/s) */
+        /* Chia trung bình dựa trên số lượng tile thực tế (n_playback_vp ≈ 6) */
+        float current_avg_tile_kbps = (n_playback_vp > 0)
+                                      ? (current_vp_kbps_sum / (float)n_playback_vp)
+                                      : 0.0f;
+        printf("nvp: %d\n", n_playback_vp);
+
         float meas_bw = (actual_wall_dl_s > 0.0f && tot_bytes > 0.0f)
-                ? (tot_bytes * 8.0f / actual_wall_dl_s)
-                : bw;
-                        
+                        ? (tot_bytes * 8.0f / actual_wall_dl_s)
+                        : bw;
         bw_hist[bw_idx++ % BW_HIST] = meas_bw;
-        printf("[BW] meas %.2f Mbps (%.3fs wall, %.1f KB)\n",
-               meas_bw * 8.0f / 1e6f, actual_wall_dl_s, tot_bytes / 1024.0f);
 
         float rebuffer_s = 0.0f;
         if (is_playing) {
-            rebuffer_s = (actual_wall_dl_s > buf_level)
-                         ? (actual_wall_dl_s - buf_level)
-                         : 0.0f;
+            rebuffer_s = (actual_wall_dl_s > buf_level) ? (actual_wall_dl_s - buf_level) : 0.0f;
         }
 
-        float smoothness_kbps = (seg == 0)
-                                ? 0.0f
-                                : fabsf(current_avg_tile_kbps - prev_vp_bitrate_kbps);
+        float smoothness_kbps = (seg == 0) ? 0.0f : fabsf(current_avg_tile_kbps - prev_vp_bitrate_kbps);
 
-        float seg_qoe = calculate_qoe(current_avg_tile_kbps,
-                                      rebuffer_s,
-                                      smoothness_kbps);
+        float seg_qoe = calculate_qoe(current_avg_tile_kbps, rebuffer_s, smoothness_kbps);
         total_qoe_score += seg_qoe;
 
+        /* IN THÔNG TIN ĐỐI CHỨNG */
+        printf("[METRICS EVAL] Tiles in Viewport = %d (Đã đưa về chuẩn hình học)\n", n_playback_vp);
         printf("[METRICS] VP_BR=%.1f Kbps  Rebuf=%.3fs  Smooth=%.1f Kbps\n",
                current_avg_tile_kbps, rebuffer_s, smoothness_kbps);
-        printf("[METRICS] Seg QoE=%.3f  Total QoE=%.3f\n",
-               seg_qoe, total_qoe_score);
+        printf("[METRICS] Seg QoE=%.3f  Total QoE=%.3f\n", seg_qoe, total_qoe_score);
 
         prev_vp_bitrate_kbps = current_avg_tile_kbps;
 
-        /* ── Step H: Buffer update ───────────────────────────────────────── */
-        /*Pre-buffering: first 3 segment will not count rebuffer*/
+        /* ── Step G: Buffer update ───────────────────────────────────────── */
         if (!is_playing) {
             buf_level += SEGMENT_DURATION;
             printf("[PLAYER] Pre-buffering... (Buffer hiện tại: %.2fs)\n", buf_level);
@@ -473,29 +374,28 @@ int main(void)
         if (buf_level > MAX_BUFFER_SIZE) buf_level = MAX_BUFFER_SIZE;
         printf("[BUF] %.2fs\n", buf_level);
 
+        /* ── Step H: CSV Logging ─────────────────────────────────────────── */
         metrics_log_entry_t entry;
         entry.segment_id          = seg + 1;
         entry.network_bw_mbps     = meas_bw / 1e6f;
         entry.avg_vp_bitrate_kbps = current_avg_tile_kbps;
-        entry.buffer_level_s      = buf_level;  // Lúc này buf_level đã là 1.0s ở segment 1
+        entry.buffer_level_s      = buf_level; 
         entry.rebuffer_s          = rebuffer_s;
         entry.smoothness          = smoothness_kbps;
-
+        
         if (!is_playing) {
             entry.seg_qoe = 0.0f;
-            total_qoe_score -= seg_qoe;
-
         } else {
             entry.seg_qoe = seg_qoe;
         }
         
-        entry.total_qoe           = total_qoe_score; 
-        entry.et_count   = (ACTIVE_ALGORITHM == SCHEDULER_SLR) ? rh.early_term_count : 0;
-        entry.cpu_rho    = (ACTIVE_ALGORITHM == SCHEDULER_SLR) ? rho : 0.0f;
+        entry.total_qoe  = total_qoe_score; 
+        entry.et_count   = 0;    // Excluded: Only applies to SLR
+        entry.cpu_rho    = 0.0f; // Excluded: Stripped CPU metric
         metrics_logger_write(&m_logger, &entry);
-        /* ======================================================== */
 
-        /* Step I: feed HMD sample */
+
+        /* Step I: Feed HMD sample */
         add_viewport_sample(&vpes, actual_yaw, actual_pitch);
         prev_pred_yaw = pred_yaw;
         prev_ts_ms    = actual_ts_ms;
@@ -505,11 +405,6 @@ int main(void)
 
     /* shutdown */
     printf("\n=== Session complete  Algorithm: %s ===\n", algo_name);
-    printf("  Total ET tiles     : %d\n", rh.early_term_count);
-    if (ACTIVE_ALGORITHM == SCHEDULER_SLR)
-        printf("  Final SLR: λ=%.4f  μ=%.4f  γ=%.4f\n",
-               slr_state.lambda, slr_state.mu, slr_state.gamma);
-    print_evaluation_report(&my_metrics, "SLR-Smooth Proposed");
     printf("The chosen dl version is: ");
     for(int i = 0; i < TOTAL_SEGMENTS; i++)
     {
