@@ -1,11 +1,14 @@
 /*
- * Demonstrates the SalientVR 360-degree video scheduling algorithm.
+ * Demonstrates the Pano 360-degree video scheduling algorithm.
  *
- * SalientVR Optimization Logic (MobiCom '22):
- * - Focuses on precise gaze-driven saliency rather than viewport bounds.
- * - Enforces network constraints as strict capacity boundaries to avoid 
- * Lagrangian tuning instabilities.
- * - Solves allocation mathematically via Simulated Annealing with a Monotonic constraint.
+ * Pano Optimization Logic (SIGCOMM '19):
+ * - Focuses strictly on maximizing perceived quality (augmented PSPNR) 
+ * bounded by a strict network bandwidth constraint.
+ * - Introduces 360JND (Just-Noticeable Difference) multipliers based on:
+ * 1. Viewpoint moving speed (deg/s)
+ * 2. Scene luminance change (Not simulated in this trace)
+ * 3. Depth-of-Field difference (Not simulated in this trace)
+ * - Bypasses CPU load metrics and early-termination recovery heuristics.
  */
 
 #include <stdio.h>
@@ -20,20 +23,46 @@
 #include "proto_comp/request_handler_v2.h"
 #include "proto_comp/cts_scheduler.h"
 #include "proto_comp/metrics_logger.h"
-#include "proto_comp/bw_estimator.h"
 
 /* ── configuration ──────────────────────────────────────────────────────── */
 #define SERVER_ADDR              "https://192.168.101.17:8443"
 #define TOTAL_SEGMENTS           10
 #define VP_HISTORY_SZ            20
-#define PROTOCOL                 STREAM_HTTP_2_0
-#define ACTIVE_ALGORITHM         SCHEDULER_SALIENTVR
-#define BW_INIT_BITS_S           35000000.0f    /* 0.5 Mbps */
-#define SVR_EPSILON              0.3f         /* Low-salient weight */
-
-/* Half-extents of the 90×90° viewport */
+#define PROTOCOL                 STREAM_HTTP_3_0
+#define TAU_EARLY_TERM           0.00f  /* ĐÃ SỬA: Tắt ET từ lúc khởi tạo */
 #define VP_HALF_YAW              (VIEWPORT_WIDTH_DEGREES  / 2.0f)
 #define VP_HALF_PITCH            (VIEWPORT_HEIGHT_DEGREES / 2.0f)
+#define SACCADE_THRESHOLD_DEG_S  30.0f
+#define ACTIVE_ALGORITHM         SCHEDULER_SALIENTVR
+
+/* Bandwidth initialized in bits/s to match VIDEO_BIT_RATE[] */
+#define BW_INIT_BITS_S           35000000.0f    /* 0.5 Mbps */
+
+/* NEW CODE: Bộ lọc Viewport thực tế hiển thị trên màn hình (~6 Tiles) */
+static int filter_actual_viewport_tiles(float yaw, float pitch, const int *predicted_vp, int n_pred, int *filtered_vp)
+{
+    float ny = wrap_angle_360(yaw);
+    float np = clamp_pitch(pitch);
+    int k = 0;
+
+    for (int i = 0; i < n_pred; i++) {
+        int tid = predicted_vp[i];
+        int col = tid % NO_OF_COLS;
+        int row = tid / NO_OF_COLS;
+        
+        float ty     = (col + 0.5f) * TILE_WIDTH;
+        float tp     = -90.0f + (row + 0.5f) * TILE_HEIGHT;
+        float dy_raw = fabsf(ny - ty);
+        float dy     = (dy_raw > 180.0f) ? (360.0f - dy_raw) : dy_raw;
+        float dp     = fabsf(np - tp);
+
+        /* Chỉ giữ lại các tile thực sự nằm trong khung hình của kính VR */
+        if (dy <= VP_HALF_YAW && dp <= VP_HALF_PITCH) {
+            filtered_vp[k++] = tid;
+        }
+    }
+    return k;
+}
 
 /* ── QoE constants ──────────────────────────────────────────────────────── */
 #define MAX_TILE_BITRATE_KBPS    2000.0f
@@ -57,6 +86,21 @@ static float calculate_qoe(float avg_tile_bitrate_kbps,
          - (QOE_GAMMA * norm_smooth);
 }
 
+/* ── viewport dataset ───────────────────────────────────────────────────── */
+typedef struct { float yaw; float pitch; int timestamp; } ViewportSample;
+
+ViewportSample viewport_dataset[] = {
+    {180.0f,  0.0f,  0},
+    {192.0f,  3.0f,  1000}, {198.0f,  9.0f, 2000},
+    {177.0f, 12.0f,  3000}, {180.0f, 13.0f, 4000},
+    {210.0f,  5.0f,  5000},
+    {270.0f, 15.0f,  6000},
+    {280.0f, 10.0f,  7000},
+    {210.0f, 10.0f,  8000},
+    {280.0f, 10.0f,  9000},
+};
+
+/* ── Top-Hat Gaussian probability map ──────────────────────────────────── */
 static void build_pmap_adaptive(float yaw, float pitch,
                                 float *p,  int   n,  float sigma)
 {
@@ -83,99 +127,35 @@ static void build_pmap_adaptive(float yaw, float pitch,
     }
 }
 
-typedef struct { float yaw; float pitch; int timestamp; } ViewportSample;
-
-ViewportSample viewport_dataset[] = {
-    {180.0f,  0.0f,  0},
-    {192.0f,  3.0f,  1000}, {198.0f,  9.0f, 2000},
-    {177.0f, 12.0f,  3000}, {180.0f, 13.0f, 4000},
-    {210.0f,  5.0f,  5000}, {270.0f, 15.0f,  6000},
-    {280.0f, 10.0f,  7000}, {210.0f, 10.0f,  8000},
-    {280.0f, 10.0f,  9000},
-};
-
-/* ── SalientVR Gaze-Driven Saliency Judger (Section 4.1) ───────────────── */
-static void build_salientvr_pmap(float head_yaw, float head_pitch,
-                                 float gaze_yaw, float gaze_pitch,
-                                 float *p, int n)
+static int build_vp_list(const float *p, int n, int *vp, float thr)
 {
-    for (int i = 0; i < n; i++) {
-        int col = i % NO_OF_COLS;
-        int row = i / NO_OF_COLS;
-        float ty = (col + 0.5f) * TILE_WIDTH;
-        float tp = -90.0f + (row + 0.5f) * TILE_HEIGHT;
-        
-        /* Distance to simulated gaze point */
-        float dy_gaze = fabsf(wrap_angle_360(gaze_yaw) - ty);
-        if (dy_gaze > 180.0f) dy_gaze = 360.0f - dy_gaze;
-        float dp_gaze = fabsf(clamp_pitch(gaze_pitch) - tp);
-        float dist_gaze = sqrtf(dy_gaze*dy_gaze + dp_gaze*dp_gaze);
-        
-        /* Distance to head center (Viewport) */
-        float dy_head = fabsf(wrap_angle_360(head_yaw) - ty);
-        if (dy_head > 180.0f) dy_head = 360.0f - dy_head;
-        float dp_head = fabsf(clamp_pitch(head_pitch) - tp);
-        
-        /* Figure 7: Saliency Judgment Rules */
-        if (dist_gaze <= 25.0f) {
-            p[i] = 1.0f;          // High-salient gaze region
-        } else if (dy_head <= VP_HALF_YAW && dp_head <= VP_HALF_PITCH) {
-            p[i] = SVR_EPSILON;   // Low-salient hollow viewport
-        } else {
-            p[i] = 0.05f;         // FIX: Sửa 0.0f thành 0.05f để NVP không luôn là version 0
-        }
-    }
-}
-
-static int build_vp_list(const float *p, int n, int *vp, float thr) {
     int k = 0;
     for (int i = 0; i < n; i++) if (p[i] >= thr) vp[k++] = i;
     return k;
 }
 
+/* ── harmonic bandwidth estimator (bits/s) ─────────────────────────────── */
 #define BW_HIST 3
-static float harmonic_bw(float *h, int n) {
+static float harmonic_bw(float *h, int n)
+{
     float s = 0.0f; int c = 0;
     for (int i = 0; i < n; i++) if (h[i] > 0.0f) { s += 1.0f / h[i]; c++; }
     return (s > 0.0f && c > 0) ? ((float)c / s) : BW_INIT_BITS_S;
 }
 
-static double now_seconds(void) {
+/* ── Wall-clock timer ──────────────────────────────────────── */
+static double now_seconds(void)
+{
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
 }
 
-static void get_actual_vp_tiles(float yaw, float pitch, int tile_count, 
-                                int *actual_vp_tiles, int *num_actual_vp)
-{
-    float ny = wrap_angle_360(yaw);
-    float np = clamp_pitch(pitch);
-    *num_actual_vp = 0;
-
-    for (int i = 0; i < tile_count; i++) {
-        int   col    = i % NO_OF_COLS;
-        int   row    = i / NO_OF_COLS;
-        float ty     = (col + 0.5f) * TILE_WIDTH;
-        float tp     = -90.0f + (row + 0.5f) * TILE_HEIGHT;
-        
-        float dy_raw = fabsf(ny - ty);
-        float dy     = (dy_raw > 180.0f) ? (360.0f - dy_raw) : dy_raw;
-        float dp     = fabsf(np - tp);
-
-        if (dy <= VP_HALF_YAW && dp <= VP_HALF_PITCH) {
-            actual_vp_tiles[(*num_actual_vp)++] = i;
-        }
-    }
-}
-
 /* ── main ───────────────────────────────────────────────────────────────── */
 int main(void)
 {
-    const char *algo_name = "SalientVR";
+    const char *algo_name = "PANO";
     printf("=== CTS Streaming Demo  Algorithm: %s ===\n\n", algo_name);
-
-    srand((unsigned int)time(NULL));
 
     float total_qoe_score      = 0.0f;
     float prev_vp_bitrate_kbps = 0.0f;
@@ -187,184 +167,213 @@ int main(void)
         yaw_h[i] = 180.0f; pit_h[i] = 0.0f; ts[i] = i;
     }
     viewport_prediction_t vpes;
-    vpes_init(&vpes, yaw_h, pit_h, ts, 0, VP_HISTORY_SZ, VP_HISTORY_SZ, VP_HISTORY_SZ, VIEWPORT_ESTIMATOR_LEGR);
+    if (vpes_init(&vpes, yaw_h, pit_h, ts, 0, VP_HISTORY_SZ,
+                  VP_HISTORY_SZ, VP_HISTORY_SZ,
+                  VIEWPORT_ESTIMATOR_LEGR) != RET_SUCCESS) {
+        fprintf(stderr, "[main] vpes_init failed\n");
+        return EXIT_FAILURE;
+    }
+    printf("[INIT] Viewport predictor OK\n");
 
     /* 2. Request handler */
-    int tile_count = NO_OF_ROWS * NO_OF_COLS; 
+    int tile_count = NO_OF_ROWS * NO_OF_COLS;  /* 6 × 8 = 48 */
     request_handler_v2_t rh;
-    request_handler_v2_init(&rh, SERVER_ADDR, TOTAL_SEGMENTS, 5, (COUNT)tile_count, PROTOCOL, MAX_PARALLEL_VP_TILES);
-    rh.pool->early_term_tau = 0.0f; // Disabled for SalientVR
+    if (request_handler_v2_init(&rh, SERVER_ADDR, TOTAL_SEGMENTS,
+                                5, (COUNT)tile_count, PROTOCOL,
+                                MAX_PARALLEL_VP_TILES) != RET_SUCCESS) {
+        fprintf(stderr, "[main] rh init failed\n");
+        return EXIT_FAILURE;
+    }
+    rh.pool->early_term_tau = TAU_EARLY_TERM;
+    printf("[INIT] Request handler OK (tau=%.2f)\n", TAU_EARLY_TERM);
 
+    /* 3. Scheduler structures */
     cts_tile_t *tiles = (cts_tile_t *)calloc(tile_count, sizeof(cts_tile_t));
+    if (!tiles) { request_handler_v2_destroy(&rh); return EXIT_FAILURE; }
+
     cts_output_t sched_out = { .tiles = tiles, .tile_count = tile_count };
 
     float p_map[NO_OF_ROWS * NO_OF_COLS];
     int   vp_tiles[NO_OF_ROWS * NO_OF_COLS];
+
     float bw_hist[BW_HIST] = { BW_INIT_BITS_S, BW_INIT_BITS_S, BW_INIT_BITS_S };
     int   bw_idx    = 0;
     float buf_level = 0.0f;     
     bool  is_playing = false;   
     int   last_q    = 0;
 
+    float prev_pred_yaw = 180.0f;
+    int   prev_ts_ms    = 0;
+
+    printf("[INIT] Ready.  Starting %d segments.\n\n", TOTAL_SEGMENTS);
+
     /* Metrics logger */
     metrics_logger_t m_logger;
-    const char *log_filename = "salientvr_metrics.csv";
+    const char *log_filename = "pano_metrics.csv";
     if (metrics_logger_init(&m_logger, log_filename) != 0)
         return EXIT_FAILURE;
 
+    int chosen_bitrate_all[TOTAL_SEGMENTS];
+    /* ════════════════════════════════════════════════════════════════════
+     * SEGMENT LOOP
+     * ════════════════════════════════════════════════════════════════════ */
     for (COUNT seg = 0; seg < TOTAL_SEGMENTS; seg++) {
         printf("━━━━━━  SEG %llu  buf=%.2fs  ━━━━━━\n", seg+1, buf_level);
 
-        int   data_idx     = (seg < (sizeof(viewport_dataset)/sizeof(ViewportSample))) ? (int)seg : 0;
+        int   data_idx     = (seg < (sizeof(viewport_dataset)/sizeof(ViewportSample)))
+                             ? (int)seg : 0;
         float actual_yaw   = viewport_dataset[data_idx].yaw;
         float actual_pitch = viewport_dataset[data_idx].pitch;
         int   actual_ts_ms = viewport_dataset[data_idx].timestamp;
 
         /* Step A: Viewport prediction */
         float pred_yaw = 180.0f, pred_pit = 0.0f;
-        vpes.vpes_post(&vpes, &pred_yaw, &pred_pit);
+        if (vpes.vpes_post(&vpes, &pred_yaw, &pred_pit) == RET_SUCCESS)
+            printf("[VP] pred yaw=%.1f°  pitch=%.1f°\n", pred_yaw, pred_pit);
+        else
+            printf("[VP] prediction failed — using last centre\n");
 
-        /* Step B: Use Gaussian Heatmap to mimic SalientVR's DNN */
-        float eval_p_map[NO_OF_ROWS * NO_OF_COLS];
-        float adaptive_sigma = 27.0f; 
-        build_salientvr_pmap(pred_yaw, pred_pit, pred_yaw, pred_pit, eval_p_map, tile_count);
+        /* Calculate Viewport Velocity (Critical for Pano 360JND) */
+        float dt_s      = (actual_ts_ms > prev_ts_ms)
+                          ? (actual_ts_ms - prev_ts_ms) / 1000.0f : 1.0f;
+        float d_yaw_raw = fabsf(pred_yaw - prev_pred_yaw);
+        float d_yaw     = (d_yaw_raw > 180.0f) ? (360.0f - d_yaw_raw) : d_yaw_raw;
+        float velocity  = d_yaw / dt_s;
+
+        float adaptive_sigma = (velocity > 20.0f)
+                               ? (VIEWPORT_WIDTH_DEGREES * 0.5f)
+                               : (VIEWPORT_WIDTH_DEGREES * 0.3f);
+
+        /* VÔ HIỆU HÓA EARLY TERMINATION (ET) ĐỂ ĐÁNH GIÁ CÔNG BẰNG VỚI MOSAIC */
+        rh.pool->early_term_tau = 0.0f;
         
-        /* Generate the 24-tile list for the HTTP downloader and QoE metric */
-        request_handler_v2_update_pmap(&rh, eval_p_map);
-        int nvp = 0;
-        get_actual_vp_tiles(pred_yaw, pred_pit, tile_count, vp_tiles, &nvp);
+        printf("[TAU] velocity=%.1f°/s  sigma=%.1f°  tau=0.000 (Disabled)\n",
+               velocity, adaptive_sigma);
 
-        /* Step C: Bandwidth estimate */
-        float bw = harmonic_bw(bw_hist, bw_idx) * 0.90f;
+        /* Step B: Probability map */
+        build_pmap_adaptive(pred_yaw, pred_pit, p_map, tile_count, adaptive_sigma);
+        request_handler_v2_update_pmap(&rh, p_map);
+        int nvp = build_vp_list(p_map, tile_count, vp_tiles, 0.15f);
+        printf("[PM] %d viewport tiles\n", nvp);
 
-        /* Step D: CTS scheduling (SalientVR) */
+        /* Step C: Bandwidth estimate (bits/s) */
+        float bw = harmonic_bw(bw_hist, BW_HIST) * 0.90f;
+        printf("[BW] est %.2f Mbps\n", bw / 1e6f);
+
+        /* Step D: CTS scheduling (PANO) */
         cts_input_t cin;
         cts_input_init(&cin);
+        cin.p_map                 = p_map;
+        cin.tile_count            = tile_count;
+        cin.bandwidth             = bw;           /* bits/s */
+        cin.buffer_level          = buf_level;
+        cin.protocol              = PROTOCOL;
+        cin.last_quality          = last_q;
         
-        /* THE FIX: Feed the continuous heatmap directly to SalientVR */
-        cin.p_map        = eval_p_map; 
-        cin.tile_count   = tile_count;
-        cin.bandwidth    = bw;           
-        cin.buffer_level = buf_level;
-        cin.last_quality = last_q;
-        
-        cts_schedule(ACTIVE_ALGORITHM, &cin, &sched_out, NULL);
-        
-        // Track average chunk quality to feed DC_k temporal smoothness in next loop
-        float chunk_avg_q = 0;
-        for(int i=0; i<tile_count; i++) chunk_avg_q += sched_out.tiles[i].chosen_version;
-        last_q = (int)roundf(chunk_avg_q / tile_count);
+        /* Pano-specific inputs */
+        cin.viewpoint_speed_deg_s = velocity; 
+        cin.tile_lum_change       = NULL; /* Missing from trace dataset */
+        cin.tile_dof_diff         = NULL; /* Missing from trace dataset */
 
-        /* ==================== THÊM ĐOẠN LOG VÀO ĐÂY ==================== */
-        printf("[VP QUALITIES] ");
-        for (int i = 0; i < nvp; i++) {
-            int tid = vp_tiles[i];
-            int version = sched_out.tiles[tid].chosen_version;
-            
-            // Chỉ in Tile ID và Version, gỡ bỏ hoàn toàn Kbps
-            printf("T%d:V%d ", tid, version);
+        memset(&sched_out, 0, sizeof(sched_out));
+        sched_out.tiles      = tiles;
+        sched_out.tile_count = tile_count;
+
+        if (cts_schedule(ACTIVE_ALGORITHM, &cin, &sched_out, NULL) != RET_SUCCESS) {
+            fprintf(stderr, "[main] cts_schedule failed\n");
+            break;
         }
-        printf("\n");
+        
+        cts_print_schedule(&sched_out, ACTIVE_ALGORITHM);
 
-        /* Log thêm các tile ngoài Viewport (NVP) để kiểm tra việc phân bổ chất lượng */
-        printf("[NVP QUALITIES (V > 0)] ");
-        int nvp_upgraded = 0;
-        for (int i = 0; i < tile_count; i++) {
-            // Kiểm tra xem tile i có nằm trong vp_tiles không
-            int is_vp = 0;
-            for (int j = 0; j < nvp; j++) {
-                if (vp_tiles[j] == i) { is_vp = 1; break; }
-            }
-            
-            // Nếu là NVP và thuật toán cấp chất lượng > 0 thì in ra
-            if (!is_vp) {
-                int version = sched_out.tiles[i].chosen_version;
-                if (version > 0) { 
-                    printf("T%d:V%d ", i, version);
-                    nvp_upgraded++;
-                }
-            }
-        }
-        if (nvp_upgraded == 0) printf("None");
-        printf("\n");
-        /* =============================================================== */
+        printf("[%s] J=%.2f  BW=%.2f Mbps  VP_avg=%.0f bps\n",
+               algo_name, sched_out.objective_value,
+               sched_out.total_bw_used / 1e6f,
+               sched_out.vp_avg_quality);
 
-        /* Step E: Download */
+        if (nvp > 0) last_q = sched_out.tiles[vp_tiles[0]].chosen_version;
+        
+        chosen_bitrate_all[seg] = last_q;
+        /* ── Step E: Download ────────────────────────────────────────────── */
         rh.cts_out = &sched_out;
         double t_start = now_seconds();
-        request_handler_v2_post_get_info_no_rm(&rh, seg, vp_tiles, nvp, NULL, actual_yaw, actual_pitch, PROTOCOL);
+
+        /* Uses no-RM version to bypass stripped resource_monitor dependency */
+        if (request_handler_v2_post_get_info_no_rm(&rh, seg, vp_tiles, nvp,
+                                                   NULL, actual_yaw, actual_pitch,
+                                                   PROTOCOL) != RET_SUCCESS) {
+            fprintf(stderr, "[main] download seg %llu failed\n", seg+1);
+        }
+
         double t_end = now_seconds();
 
-        /* ── Step F: BW Metrics & Buffer Management ──────────────────────── */
         float actual_wall_dl_s = (float)(t_end - t_start);
-        if (actual_wall_dl_s < 1e-4f) actual_wall_dl_s = 0.001f;
+        if (actual_wall_dl_s < 1e-4f) actual_wall_dl_s = 0.001f;  /* fallback */
 
+        /* ── Step F: BW & Metrics ────────────────────────────────────────── */
         float tot_bytes = 0.0f;
         for (int i = 0; i < tile_count; i++) {
             tot_bytes += (float)rh.size_dl[i];
         }
-        
-        /* THE FIX: CHỈ TÍNH QoE TRONG ACTUAL VIEWPORT (90x90 độ) */
-        int strict_nvp = 0;
-        float strict_vp_kbps_sum = 0.0f;
-        
-        for (int i = 0; i < tile_count; i++) {
-            int col = i % NO_OF_COLS;
-            int row = i / NO_OF_COLS;
-            float ty = (col + 0.5f) * TILE_WIDTH;
-            float tp = -90.0f + (row + 0.5f) * TILE_HEIGHT;
-            
-            float dy_raw = fabsf(wrap_angle_360(actual_yaw) - ty);
-            float dy = (dy_raw > 180.0f) ? (360.0f - dy_raw) : dy_raw;
-            float dp = fabsf(clamp_pitch(actual_pitch) - tp);
-            
-            /* Nếu tile nằm gọn trong 90x90 độ (Mỗi chiều lệch tối đa 45 độ) */
-            if (dy <= VP_HALF_YAW && dp <= VP_HALF_PITCH) {
-                strict_nvp++;
-                strict_vp_kbps_sum += ((float)rh.size_dl[i] * 8.0f) / 1000.0f;
-            }
-        }
-        printf("nvp: %d\n", strict_nvp);
 
-        /* Trung bình bitrate CHỈ CỦA CÁC TILE NGƯỜI DÙNG THỰC SỰ NHÌN THẤY */
-        float current_avg_tile_kbps = (strict_nvp > 0) ? (strict_vp_kbps_sum / (float)strict_nvp) : 0.0f;
-        
-        /* Xử lý lỗi đo băng thông khi dung lượng chunk quá nhỏ (Tránh Spiral) */
-        float meas_bw = (actual_wall_dl_s > 0.0f && tot_bytes > 0.0f) ? (tot_bytes * 8.0f / actual_wall_dl_s) : bw;
-        if (tot_bytes < 3000000.0f && meas_bw < bw) {
-            meas_bw = bw; 
+        /* LỌC RA ĐÚNG ~6 TILE THỰC TẾ TRONG TẦM MẮT ĐỂ CHẤM ĐIỂM QOE */
+        int playback_vp_tiles[NO_OF_ROWS * NO_OF_COLS];
+        int n_playback_vp = filter_actual_viewport_tiles(actual_yaw, actual_pitch, vp_tiles, nvp, playback_vp_tiles);
+
+        float current_vp_kbps_sum = 0.0f;
+        for (int i = 0; i < n_playback_vp; i++) {
+            int tid = playback_vp_tiles[i];
+            current_vp_kbps_sum += ((float)rh.size_dl[tid] * 8.0f) / 1000.0f;
         }
+
+        /* Chia trung bình dựa trên số lượng tile thực tế (n_playback_vp ≈ 6) */
+        float current_avg_tile_kbps = (n_playback_vp > 0)
+                                      ? (current_vp_kbps_sum / (float)n_playback_vp)
+                                      : 0.0f;
+        printf("nvp: %d\n", n_playback_vp);
+
+        float meas_bw = (actual_wall_dl_s > 0.0f && tot_bytes > 0.0f)
+                        ? (tot_bytes * 8.0f / actual_wall_dl_s)
+                        : bw;
         bw_hist[bw_idx++ % BW_HIST] = meas_bw;
-        
+
         float rebuffer_s = 0.0f;
         if (is_playing) {
             rebuffer_s = (actual_wall_dl_s > buf_level) ? (actual_wall_dl_s - buf_level) : 0.0f;
         }
-        
+
         float smoothness_kbps = (seg == 0) ? 0.0f : fabsf(current_avg_tile_kbps - prev_vp_bitrate_kbps);
+
         float seg_qoe = calculate_qoe(current_avg_tile_kbps, rebuffer_s, smoothness_kbps);
         total_qoe_score += seg_qoe;
-        
-        printf("[METRICS] VP_BR=%.1f Kbps  Rebuf=%.3fs  Smooth=%.1f Kbps\n", current_avg_tile_kbps, rebuffer_s, smoothness_kbps);
+
+        /* IN THÔNG TIN ĐỐI CHỨNG */
+        printf("[METRICS EVAL] Tiles in Viewport = %d (Đã đưa về chuẩn hình học)\n", n_playback_vp);
+        printf("[METRICS] VP_BR=%.1f Kbps  Rebuf=%.3fs  Smooth=%.1f Kbps\n",
+               current_avg_tile_kbps, rebuffer_s, smoothness_kbps);
         printf("[METRICS] Seg QoE=%.3f  Total QoE=%.3f\n", seg_qoe, total_qoe_score);
-        
+
         prev_vp_bitrate_kbps = current_avg_tile_kbps;
-        
+
+        /* ── Step G: Buffer update ───────────────────────────────────────── */
         if (!is_playing) {
             buf_level += SEGMENT_DURATION;
             printf("[PLAYER] Pre-buffering... (Buffer hiện tại: %.2fs)\n", buf_level);
-            if (buf_level >= 3.0f) {
+            
+            if (buf_level >= 3.0f) {  
                 is_playing = true;
                 printf("[PLAYER] Pre-buffering hoàn tất, video bắt đầu PLAY!\n");
             }
         } else {
-            buf_level = (buf_level >= actual_wall_dl_s) ? (buf_level - actual_wall_dl_s) : 0.0f;
+            buf_level = (buf_level >= actual_wall_dl_s)
+                        ? (buf_level - actual_wall_dl_s)
+                        : 0.0f;
             buf_level += SEGMENT_DURATION;
         }
 
         if (buf_level > MAX_BUFFER_SIZE) buf_level = MAX_BUFFER_SIZE;
         printf("[BUF] %.2fs\n", buf_level);
-        
+
         /* ── Step H: CSV Logging ─────────────────────────────────────────── */
         metrics_log_entry_t entry;
         entry.segment_id          = seg + 1;
@@ -381,18 +390,26 @@ int main(void)
         }
         
         entry.total_qoe  = total_qoe_score; 
-        entry.et_count   = 0;
-        entry.cpu_rho    = 0.0f; 
+        entry.et_count   = 0;    // Excluded: Only applies to SLR
+        entry.cpu_rho    = 0.0f; // Excluded: Stripped CPU metric
         metrics_logger_write(&m_logger, &entry);
 
-        /* Step I: feed HMD sample */
+
+        /* Step I: Feed HMD sample */
         add_viewport_sample(&vpes, actual_yaw, actual_pitch);
+        prev_pred_yaw = pred_yaw;
+        prev_ts_ms    = actual_ts_ms;
+
         request_handler_v2_reset(&rh);
     }
 
     /* shutdown */
     printf("\n=== Session complete  Algorithm: %s ===\n", algo_name);
-
+    printf("The chosen dl version is: ");
+    for(int i = 0; i < TOTAL_SEGMENTS; i++)
+    {
+        printf("%d, ", chosen_bitrate_all[i]);
+    }
     free(tiles);
     metrics_logger_close(&m_logger);
     printf("  Metrics → %s\n", log_filename);
