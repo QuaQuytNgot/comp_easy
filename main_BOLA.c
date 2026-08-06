@@ -105,13 +105,10 @@ static int bola_select_quality(float p_d, float buf_s)
 {
     int   best_m     = 0;
     float best_score = -1.0e30f;
-    bool  any_pos    = false;
 
     for (int m = 0; m < BOLA_NUM_Q; m++) {
         float R_m = BOLA_RATES[m];
-        /* logarithmic utility: v_m = log(R_m/R_0 + 1) */
         float v_m = logf(R_m / BOLA_RATES[0] + 1.0f);
-        /* segment size in bytes */
         float S_m = R_m * BOLA_DELTA / 8.0f;
 
         float score = (BOLA_V * (v_m * p_d + BOLA_GAMMA * BOLA_DELTA)
@@ -121,11 +118,9 @@ static int bola_select_quality(float p_d, float buf_s)
             best_score = score;
             best_m     = m;
         }
-        if (score > 0.0f) any_pos = true;
     }
-
-    /* If no quality yields positive score: conservative minimum */
-    return any_pos ? best_m : 0;
+    // Trả về đúng nghiệm của phương trình 5a (argmax)
+    return best_m; 
 }
 
 /*
@@ -192,6 +187,9 @@ static void build_pmap_adaptive(float yaw, float pitch,
     float ny = wrap_angle_360(yaw);
     float np = clamp_pitch(pitch);
 
+    float sum_p = 0.0f; // Khai báo biến để tính tổng xác suất
+
+    // Bước 1: Tính xác suất thô và áp dụng mức sàn (floor)
     for (int i = 0; i < n; i++) {
         int   col    = i % NO_OF_COLS;
         int   row    = i / NO_OF_COLS;
@@ -207,6 +205,24 @@ static void build_pmap_adaptive(float yaw, float pitch,
             float ey = (dy > VP_HALF_YAW)  ? (dy - VP_HALF_YAW)  : 0.0f;
             float ep = (dp > VP_HALF_PITCH) ? (dp - VP_HALF_PITCH) : 0.0f;
             p[i] = expf(-(ey * ey + ep * ep) / two_s2);
+        }
+        
+        // --- PHẦN THÊM MỚI ---
+        // Đảm bảo xác suất của non-VP tiles không bao giờ tụt về 0. 
+        // Lấy mốc 0.017f dựa trên phân phối Heterogeneous của bài báo.
+        if (p[i] < 0.017f) {
+            p[i] = 0.017f; 
+        }
+        
+        // Cộng dồn để lấy tổng xác suất
+        sum_p += p[i]; 
+    }
+
+    // Bước 2: Chuẩn hóa xác suất (Normalization)
+    // Đảm bảo tổng tất cả p_d của một chunk cộng lại bằng 1
+    if (sum_p > 0.0f) {
+        for (int i = 0; i < n; i++) {
+            p[i] = p[i] / sum_p;
         }
     }
 }
