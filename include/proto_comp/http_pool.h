@@ -65,9 +65,20 @@
  * ───────────────────────────────────────────────────────────────────────── */
 #define RET_EARLY_TERMINATED  2u
 
+/* Stage-2 request was intentionally not admitted because the PSI gate stayed
+ * closed until Stage 1 completed. This is not a transport failure. */
+#define RET_RESOURCE_GATED    3u
+
 /* Default probability threshold τ.  Set pool->early_term_tau = 0.0f to
  * disable early termination entirely. */
 #define HTTP_POOL_TAU_DEFAULT 0.10f
+
+/* Adaptive PSI gate from Section 6:
+ *   tau_gate = clamp(tau_max - kappa * mu, tau_min, tau_max) */
+#define HTTP_POOL_STAGE1_PROB_MIN  0.50f
+#define HTTP_POOL_PSI_GATE_MIN    45.0f
+#define HTTP_POOL_PSI_GATE_MAX    85.0f
+#define HTTP_POOL_PSI_GATE_KAPPA  40.0f
 
 /* ─────────────────────────────────────────────────────────────────────────
  * Connection pool — wraps CURLSH for DNS / SSL / connection sharing.
@@ -82,6 +93,9 @@ typedef struct http_pool_t {
 
     /* Stochastic early-termination threshold τ (0.0f = disabled) */
     float         early_term_tau;
+
+    /* Latest SLR CPU multiplier shared with the Stage-2 admission gate. */
+    float         cpu_mu;
 } http_pool_t;
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -127,16 +141,30 @@ RET http_pool_init(http_pool_t *pool, HTTP_VERSION ver,
 /* Destroy connection pool */
 RET http_pool_destroy(http_pool_t *pool);
 
+/* Publish the latest SLR CPU multiplier; values are clamped to [0,1]. */
+void http_pool_set_cpu_mu(http_pool_t *pool, float cpu_mu);
+
+/* Compute clamp(85 - 40*mu, 45, 85), in PSI percentage units. */
+float http_pool_stage2_psi_gate(float cpu_mu);
+
 /* Parallel download with optional per-task early termination */
 RET http_pool_get_parallel(http_pool_t     *pool,
                            download_task_t *tasks,
                            int              num_tasks,
                            int              max_concurrent);
+/* ET-aware parallel download — chuyên dùng cho Stage 2 */
+RET http_pool_get_parallel_et(http_pool_t *pool,
+                              download_task_t *tasks,
+                              int num_tasks,
+                              int max_concurrent);
 
-RET http_pool_get_parallel_dynamic(http_pool_t     *pool,
-                                download_task_t *tasks,
-                                int              num_tasks,
-                                int              max_concurrent,
-                                resource_monitor_t *rm);
+/* CPU-aware two-stage dispatch:
+ *   Stage 1: p_i >= 0.50, admitted immediately.
+ *   Stage 2: p_i < 0.50, admitted only when PSI some avg10 < adaptive gate. */
+RET http_pool_get_parallel_dynamic(http_pool_t       *pool,
+                                   download_task_t   *tasks,
+                                   int                num_tasks,
+                                   int                max_concurrent,
+                                   resource_monitor_t *rm);
 
 #endif /* HTTP_POOL_H */

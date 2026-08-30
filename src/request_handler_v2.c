@@ -1,532 +1,10 @@
-// #include "proto_comp/request_handler_v2.h"
-// #include <stdio.h>
-// #include <string.h>
-// #include <stdlib.h>
-
-// RET request_handler_v2_init(request_handler_v2_t *self,
-//                             const char *ser_adrr,
-//                             COUNT seg_count,
-//                             COUNT version_count,
-//                             COUNT tile_count,
-//                             HTTP_VERSION protocol,
-//                             int max_parallel_downloads)
-// {
-//     if (!self || !ser_adrr) return RET_FAIL;
-
-//     memset(self, 0, sizeof(request_handler_v2_t));
-
-//     self->ser_addr = (char *)ser_adrr;
-//     self->seg_count = seg_count;
-//     self->tile_count = tile_count;
-//     self->version_count = version_count;
-//     self->max_parallel_downloads = max_parallel_downloads;
-
-//     self->pool = (http_pool_t *)malloc(sizeof(http_pool_t));
-//     if (self->pool == NULL) return RET_FAIL;
-
-//     if (http_pool_init(self->pool, protocol, max_parallel_downloads) != RET_SUCCESS) {
-//         free(self->pool);
-//         return RET_FAIL;
-//     }
-
-//     self->data = (buffer_t *)calloc(tile_count, sizeof(buffer_t));
-//     if (!self->data) goto cleanup;
-
-//     for (COUNT i = 0; i < tile_count; i++) {
-//         if (buffer_init(&self->data[i]) != RET_SUCCESS) {
-//             for (COUNT j = 0; j < i; j++) {
-//                 buffer_destroy(&self->data[j]);
-//             }
-//             goto cleanup;
-//         }
-//     }
-
-//     self->dls = (bw_t *)calloc(tile_count, sizeof(bw_t));
-//     self->cnnt = (count_time_t *)calloc(tile_count, sizeof(count_time_t));
-//     self->pre_trans_time = (count_time_t *)calloc(tile_count, sizeof(count_time_t));
-//     self->start_trans_time = (count_time_t *)calloc(tile_count, sizeof(count_time_t));
-//     self->total_time = (count_time_t *)calloc(tile_count, sizeof(count_time_t));
-//     self->size_dl = (count_time_t *)calloc(tile_count, sizeof(count_time_t));
-//     self->namelookup_time = (count_time_t *)calloc(tile_count, sizeof(count_time_t));
-//     self->appconnect_time = (count_time_t *)calloc(tile_count, sizeof(count_time_t));
-//     self->redirect_time = (count_time_t *)calloc(tile_count, sizeof(count_time_t));
-//     self->header_size = (size_t *)calloc(tile_count, sizeof(size_t));
-//     self->redirect_count = (count_t *)calloc(tile_count, sizeof(int));
-//     self->connection_reused = (int *)calloc(tile_count, sizeof(int));
-
-//     if (!self->dls || !self->cnnt || !self->pre_trans_time ||
-//         !self->start_trans_time || !self->total_time || !self->size_dl ||
-//         !self->namelookup_time || !self->appconnect_time ||
-//         !self->redirect_time || !self->header_size ||
-//         !self->redirect_count || !self->connection_reused) {
-//         goto cleanup;
-//     }
-
-//     return RET_SUCCESS;
-
-// cleanup:
-//     request_handler_v2_destroy(self);
-//     return RET_FAIL;
-// }
-
-// static void calculate_group_stats(request_handler_v2_t *self,
-//                                   int *tile_ids,
-//                                   int num_tiles,
-//                                   tile_group_stats_t *stats)
-// {
-//     memset(stats, 0, sizeof(tile_group_stats_t));
-
-//     stats->min_download_speed = UINT64_MAX;
-//     stats->max_download_speed = 0;
-
-//     count_time_t *timing_array = NULL;
-//     if (num_tiles > 1) {
-//         timing_array = (count_time_t *)malloc(num_tiles * sizeof(count_time_t));
-//     }
-
-//     for (int i = 0; i < num_tiles; i++) {
-//         int tile_id = tile_ids[i];
-//         if (self->size_dl[tile_id] > 0) {
-
-//             stats->total_namelookup_time += self->namelookup_time[tile_id];
-//             stats->total_connect_time += self->cnnt[tile_id];
-//             stats->total_appconnect_time += self->appconnect_time[tile_id];
-//             stats->total_pretransfer_time += self->pre_trans_time[tile_id];
-//             stats->total_starttransfer_time += self->start_trans_time[tile_id];
-//             stats->total_time += self->total_time[tile_id];
-
-//             stats->avg_download_speed += self->dls[tile_id];
-//             if (self->dls[tile_id] < stats->min_download_speed)
-//                 stats->min_download_speed = self->dls[tile_id];
-//             if (self->dls[tile_id] > stats->max_download_speed)
-//                 stats->max_download_speed = self->dls[tile_id];
-
-//             stats->total_size += self->size_dl[tile_id];
-//             stats->avg_header_size += self->header_size[tile_id];
-
-//             stats->num_connections_reused += self->connection_reused[tile_id];
-//             stats->total_redirects += self->redirect_count[tile_id];
-//             stats->avg_redirect_time_ms += self->redirect_time[tile_id] / 1000.0;
-
-//             if (timing_array) {
-//                 timing_array[stats->tile_count] = self->total_time[tile_id];
-//             }
-
-//             stats->tile_count++;
-//         }
-//     }
-
-//     if (stats->tile_count > 0) {
-//         stats->avg_namelookup_time = stats->total_namelookup_time / stats->tile_count;
-//         stats->avg_connect_time = stats->total_connect_time / stats->tile_count;
-//         stats->avg_appconnect_time = stats->total_appconnect_time / stats->tile_count;
-//         stats->avg_pretransfer_time = stats->total_pretransfer_time / stats->tile_count;
-//         stats->avg_starttransfer_time = stats->total_starttransfer_time / stats->tile_count;
-//         stats->avg_total_time = stats->total_time / stats->tile_count;
-
-//         stats->avg_download_speed = stats->avg_download_speed / stats->tile_count;
-//         stats->avg_size = stats->total_size / stats->tile_count;
-//         stats->avg_header_size = stats->avg_header_size / stats->tile_count;
-//         stats->avg_redirect_time_ms = stats->avg_redirect_time_ms / stats->tile_count;
-
-//         if (stats->tile_count > 1 && timing_array) {
-//             double variance = 0.0;
-//             double mean = (double)stats->avg_total_time;
-//             for (int i = 0; i < stats->tile_count; i++) {
-//                 double diff = (double)timing_array[i] - mean;
-//                 variance += diff * diff;
-//             }
-//             variance /= stats->tile_count;
-//             stats->jitter_ms = sqrt(variance) / 1000.0;
-//         }
-//     }
-
-//     if (timing_array) free(timing_array);
-// }
-
-// RET request_handler_v2_post_get_info(request_handler_v2_t *self,
-//                                      COUNT chunk_id,
-//                                      int *vp_tiles,
-//                                      int num_vp_tiles,
-//                                      int *chosen_versions,
-//                                      HTTP_VERSION protocol)
-// {
-//     if (self == NULL || self->pool == NULL) return RET_FAIL;
-
-//     const char *protocol_name = (protocol == STREAM_HTTP_2_0) ? "HTTP/2" :
-//                                 (protocol == STREAM_HTTP_3_0) ? "HTTP/3" : "HTTP/1.1";
-//     printf("\n========== SEGMENT %llu (%s) - PARALLEL MODE ==========\n",
-//            chunk_id + 1, protocol_name);
-
-//     int non_vp_tiles[NO_OF_ROWS * NO_OF_COLS];
-//     int non_vp_count = 0;
-//     for (COUNT tile_id = 0; tile_id < self->tile_count; tile_id++) {
-//         bool is_viewport_tile = false;
-//         for (int i = 0; i < num_vp_tiles; i++) {
-//             if (vp_tiles[i] == tile_id) {
-//                 is_viewport_tile = true;
-//                 break;
-//             }
-//         }
-//         if (!is_viewport_tile) {
-//             non_vp_tiles[non_vp_count++] = tile_id;
-//         }
-//     }
-
-//     int total_jobs = num_vp_tiles + non_vp_count;
-//     download_task_t *jobs = (download_task_t *)calloc(total_jobs, sizeof(download_task_t));
-//     if (jobs == NULL) {
-//         printf("  ERROR: Failed to allocate download tasks\n");
-//         return RET_FAIL;
-//     }
-
-//     char **url_buffers = (char **)calloc(total_jobs, sizeof(char *));
-//     if (url_buffers == NULL) {
-//         free(jobs);
-//         return RET_FAIL;
-//     }
-
-//     char url_buffer[512];
-
-//     printf("[POOL] Preparing %d VIEWPORT tiles...\n", num_vp_tiles);
-//     for (int i = 0; i < num_vp_tiles; i++) {
-//         int tile_id = vp_tiles[i];
-//         int qp = tile_version_to_num(chosen_versions[i]);
-//         snprintf(url_buffer, sizeof(url_buffer),
-//                  "%s/Class3_RollerCoaster/Class3_RollerCoaster_%llu/erp_8x6/tile_yuv/tile_%d_%d_480x341.333333333333_QP%d.bin",
-//                  self->ser_addr, chunk_id + 1,
-//                  tile_id / NO_OF_COLS, tile_id % NO_OF_COLS, qp);
-
-//         url_buffers[i] = strdup(url_buffer);
-//         jobs[i].url = url_buffers[i];
-//         jobs[i].tile_id = tile_id;
-//         jobs[i].status = RET_FAIL;
-
-//         jobs[i].data = &self->data[tile_id];
-//         jobs[i].dls = &self->dls[tile_id];
-//         jobs[i].cnnt = &self->cnnt[tile_id];
-//         jobs[i].pre_trans_time = &self->pre_trans_time[tile_id];
-//         jobs[i].start_trans_time = &self->start_trans_time[tile_id];
-//         jobs[i].total_time = &self->total_time[tile_id];
-//         jobs[i].size_dl = &self->size_dl[tile_id];
-//         jobs[i].namelookup_time = &self->namelookup_time[tile_id];
-//         jobs[i].appconnect_time = &self->appconnect_time[tile_id];
-//         jobs[i].redirect_time = &self->redirect_time[tile_id];
-//         jobs[i].header_size = &self->header_size[tile_id];
-//         jobs[i].redirect_count = &self->redirect_count[tile_id];
-//         jobs[i].connection_reused = &self->connection_reused[tile_id];
-//     }
-
-//     printf("[POOL] Preparing %d NON-VIEWPORT tiles...\n", non_vp_count);
-//     for (int i = 0; i < non_vp_count; i++) {
-//         int tile_id = non_vp_tiles[i];
-//         int job_index = num_vp_tiles + i;
-//         snprintf(url_buffer, sizeof(url_buffer),
-//                  "%s/Class3_RollerCoaster/Class3_RollerCoaster_%llu/erp_8x6/tile_yuv/tile_%d_%d_480x341.333333333333_QP38.bin",
-//                  self->ser_addr, chunk_id + 1,
-//                  tile_id / NO_OF_COLS, tile_id % NO_OF_COLS);
-
-// //%s/beach/beach_%llu/erp_8x6/tile_yuv/tile_%d_%d_480x360_QP38.bin
-
-//         url_buffers[job_index] = strdup(url_buffer);
-//         jobs[job_index].url = url_buffers[job_index];
-//         jobs[job_index].tile_id = tile_id;
-//         jobs[job_index].status = RET_FAIL;
-
-//         jobs[job_index].data = &self->data[tile_id];
-//         jobs[job_index].dls = &self->dls[tile_id];
-//         jobs[job_index].cnnt = &self->cnnt[tile_id];
-//         jobs[job_index].pre_trans_time = &self->pre_trans_time[tile_id];
-//         jobs[job_index].start_trans_time = &self->start_trans_time[tile_id];
-//         jobs[job_index].total_time = &self->total_time[tile_id];
-//         jobs[job_index].size_dl = &self->size_dl[tile_id];
-//         jobs[job_index].namelookup_time = &self->namelookup_time[tile_id];
-//         jobs[job_index].appconnect_time = &self->appconnect_time[tile_id];
-//         jobs[job_index].redirect_time = &self->redirect_time[tile_id];
-//         jobs[job_index].header_size = &self->header_size[tile_id];
-//         jobs[job_index].redirect_count = &self->redirect_count[tile_id];
-//         jobs[job_index].connection_reused = &self->connection_reused[tile_id];
-//     }
-
-//     printf("[POOL] Executing %d total jobs in parallel...\n", total_jobs);
-//     if (http_pool_get_parallel(self->pool, jobs, total_jobs,
-//                                self->max_parallel_downloads) != RET_SUCCESS) {
-//         printf("  ERROR: http_pool_get_parallel failed\n");
-//         for(int i=0; i<total_jobs; i++) free(url_buffers[i]);
-//         free(url_buffers);
-//         free(jobs);
-//         return RET_FAIL;
-//     }
-//     printf("[POOL] All jobs completed.\n");
-
-//     tile_group_stats_t vp_stats;
-//     calculate_group_stats(self, vp_tiles, num_vp_tiles, &vp_stats);
-
-//     printf("\n[VIEWPORT SUMMARY]\n");
-//     // printf("  Protocol         : %s\n", protocol_name);
-//     // printf("  Tiles            : %d\n", vp_stats.tile_count);
-//     // printf("  Total Size       : %.2f MB (Headers: %.2f KB)\n",
-//     //        vp_stats.total_size / 1048576.0,
-//     //        vp_stats.avg_header_size / 1024.0);
-//     // printf("  Avg Tile Size    : %.2f KB\n", vp_stats.avg_size / 1024.0);
-
-//     // printf("\n  Speed Statistics:\n");
-//     // printf("    Average        : %.2f Mbps\n", vp_stats.avg_download_speed / 1000000.0);
-//     // printf("    Min            : %.2f Mbps\n",
-//     //        (vp_stats.min_download_speed == UINT64_MAX) ? 0.0 :
-//     //        (vp_stats.min_download_speed / 1000000.0));
-//     // printf("    Max            : %.2f Mbps\n", vp_stats.max_download_speed / 1000000.0);
-
-//     // printf("\n  Connection Metrics:\n");
-//     // printf("    Connections Reused: %d / %d (%.1f%%)\n",
-//     //        vp_stats.num_connections_reused, vp_stats.tile_count,
-//     //        (vp_stats.tile_count > 0) ?
-//     //        (vp_stats.num_connections_reused * 100.0 / vp_stats.tile_count) : 0);
-//     // printf("    Redirects      : %d total (avg %.2f ms)\n",
-//     //        vp_stats.total_redirects, vp_stats.avg_redirect_time_ms);
-
-//     // printf("\n  CURL Timings (avg, cumulative from start):\n");
-//     // printf("    NAMELOOKUP     : %.2f ms\n", vp_stats.avg_namelookup_time / 1000.0);
-//     // printf("    CONNECT        : %.2f ms\n", vp_stats.avg_connect_time / 1000.0);
-//     // printf("    APPCONNECT     : %.2f ms\n", vp_stats.avg_appconnect_time / 1000.0);
-//     // printf("    PRETRANSFER    : %.2f ms\n", vp_stats.avg_pretransfer_time / 1000.0);
-//     // printf("    STARTTRANSFER  : %.2f ms\n", vp_stats.avg_starttransfer_time / 1000.0);
-//     // printf("    TOTAL          : %.2f ms\n", vp_stats.avg_total_time / 1000.0);
-
-//     // printf("\n  Parallel Performance:\n");
-//     // printf("    Total Work Time: %.2f ms\n", vp_stats.total_time / 1000.0);
-//     // printf("    Jitter (σ)     : %.2f ms\n", vp_stats.jitter_ms);
-
-//     tile_group_stats_t non_vp_stats;
-//     calculate_group_stats(self, non_vp_tiles, non_vp_count, &non_vp_stats);
-
-//     printf("\n[NON-VIEWPORT SUMMARY]\n");
-//     // printf("  Protocol         : %s\n", protocol_name);
-//     // printf("  Tiles            : %d\n", non_vp_stats.tile_count);
-//     // printf("  Total Size       : %.2f MB (Headers: %.2f KB)\n",
-//     //        non_vp_stats.total_size / 1048576.0,
-//     //        non_vp_stats.avg_header_size / 1024.0);
-//     // printf("  Avg Tile Size    : %.2f KB\n", non_vp_stats.avg_size / 1024.0);
-
-//     // printf("\n  Speed Statistics:\n");
-//     // printf("    Average        : %.2f Mbps\n", non_vp_stats.avg_download_speed / 1000000.0);
-//     // printf("    Min            : %.2f Mbps\n",
-//     //        (non_vp_stats.min_download_speed == UINT64_MAX) ? 0.0 :
-//     //        (non_vp_stats.min_download_speed / 1000000.0));
-//     // printf("    Max            : %.2f Mbps\n", non_vp_stats.max_download_speed / 1000.0);
-
-//     // printf("\n  Connection Metrics:\n");
-//     // printf("    Connections Reused: %d / %d (%.1f%%)\n",
-//     //        non_vp_stats.num_connections_reused, non_vp_stats.tile_count,
-//     //        (non_vp_stats.tile_count > 0) ?
-//     //        (non_vp_stats.num_connections_reused * 100.0 / non_vp_stats.tile_count) : 0);
-//     // printf("    Redirects      : %d total (avg %.2f ms)\n",
-//     //        non_vp_stats.total_redirects, non_vp_stats.avg_redirect_time_ms);
-
-//     // printf("\n  CURL Timings (avg, cumulative from start):\n");
-//     // printf("    NAMELOOKUP     : %.2f ms\n", non_vp_stats.avg_namelookup_time / 1000.0);
-//     // printf("    CONNECT        : %.2f ms\n", non_vp_stats.avg_connect_time / 1000.0);
-//     // printf("    APPCONNECT     : %.2f ms\n", non_vp_stats.avg_appconnect_time / 1000.0);
-//     // printf("    PRETRANSFER    : %.2f ms\n", non_vp_stats.avg_pretransfer_time / 1000.0);
-//     // printf("    STARTTRANSFER  : %.2f ms\n", non_vp_stats.avg_starttransfer_time / 1000.0);
-//     // printf("    TOTAL          : %.2f ms\n", non_vp_stats.avg_total_time / 1000.0);
-
-//     // printf("\n  Parallel Performance:\n");
-//     // printf("    Total Work Time: %.2f ms\n", non_vp_stats.total_time / 1000.0);
-//     // printf("    Jitter (σ)     : %.2f ms\n", non_vp_stats.jitter_ms);
-
-//     int64_t total_bytes = vp_stats.total_size + non_vp_stats.total_size;
-//     count_time_t total_time = vp_stats.total_time + non_vp_stats.total_time;
-//     int total_tiles = vp_stats.tile_count + non_vp_stats.tile_count;
-//     int total_reused = vp_stats.num_connections_reused + non_vp_stats.num_connections_reused;
-
-//     printf("\n[SEGMENT %llu OVERALL]\n", chunk_id + 1);
-//     printf("  Protocol         : %s\n", protocol_name);
-//     printf("  Total Tiles      : %d (VP: %d, Non-VP: %d)\n",
-//            total_tiles, vp_stats.tile_count, non_vp_stats.tile_count);
-//     printf("  Total Size       : %.2f MB\n", total_bytes / 1048576.0);
-//     printf("  Total Work Time  : %.2f ms\n", total_time / 1000.0);
-//     printf("  Throughput       : %.2f Mbps\n",
-//            (total_bytes * 8.0) / (total_time / 1000000.0) / 1000000.0);
-//     printf("  Conn Reuse Rate  : %.1f%% (%d/%d)\n",
-//            (total_tiles > 0) ? (total_reused * 100.0 / total_tiles) : 0,
-//            total_reused, total_tiles);
-//     printf("===============================\n\n");
-
-//     FILE *csv_file = fopen("http_metrics_v2.csv", "a");
-//     if (csv_file) {
-//         fseek(csv_file, 0, SEEK_END);
-//         if (ftell(csv_file) == 0) {
-//             fprintf(csv_file, "segment_id,protocol,tile_type,num_tiles,"
-//                    "total_size_mb,avg_size_kb,avg_header_kb,"
-//                    "avg_speed_mbps,min_speed_mbps,max_speed_mbps,"
-//                    "namelookup_ms,connect_ms,appconnect_ms,pretransfer_ms,starttransfer_ms,total_ms,"
-//                    "parallel_total_ms,jitter_ms,"
-//                    "conn_reused,conn_reuse_pct,redirects,redirect_time_ms\n");
-//         }
-
-//         fprintf(csv_file, "%llu,%s,viewport,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.2f,%d,%.1f,%d,%.2f\n",
-//                 chunk_id + 1, protocol_name, vp_stats.tile_count,
-//                 vp_stats.total_size / 1048576.0, vp_stats.avg_size / 1024.0,
-//                 vp_stats.avg_header_size / 1024.0,
-//                 vp_stats.avg_download_speed / 1000000.0,
-//                 (vp_stats.min_download_speed == UINT64_MAX) ? 0.0 :
-//                 (vp_stats.min_download_speed / 1000000.0),
-//                 vp_stats.max_download_speed / 1000000.0,
-//                 vp_stats.avg_namelookup_time / 1000.0,
-//                 vp_stats.avg_connect_time / 1000.0,
-//                 vp_stats.avg_appconnect_time / 1000.0,
-//                 vp_stats.avg_pretransfer_time / 1000.0,
-//                 vp_stats.avg_starttransfer_time / 1000.0,
-//                 vp_stats.avg_total_time / 1000.0,
-//                 vp_stats.total_time / 1000.0, vp_stats.jitter_ms,
-//                 vp_stats.num_connections_reused,
-//                 (vp_stats.tile_count > 0) ?
-//                 (vp_stats.num_connections_reused * 100.0 / vp_stats.tile_count) : 0,
-//                 vp_stats.total_redirects, vp_stats.avg_redirect_time_ms);
-
-//         fprintf(csv_file, "%llu,%s,non-viewport,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.2f,%d,%.1f,%d,%.2f\n",
-//                 chunk_id + 1, protocol_name, non_vp_stats.tile_count,
-//                 non_vp_stats.total_size / 1048576.0, non_vp_stats.avg_size / 1024.0,
-//                 non_vp_stats.avg_header_size / 1024.0,
-//                 non_vp_stats.avg_download_speed / 1000000.0,
-//                 (non_vp_stats.min_download_speed == UINT64_MAX) ? 0.0 :
-//                 (non_vp_stats.min_download_speed / 1000000.0),
-//                 non_vp_stats.max_download_speed / 1000000.0,
-//                 non_vp_stats.avg_namelookup_time / 1000.0,
-//                 non_vp_stats.avg_connect_time / 1000.0,
-//                 non_vp_stats.avg_appconnect_time / 1000.0,
-//                 non_vp_stats.avg_pretransfer_time / 1000.0,
-//                 non_vp_stats.avg_starttransfer_time / 1000.0,
-//                 non_vp_stats.avg_total_time / 1000.0,
-//                 non_vp_stats.total_time / 1000.0, non_vp_stats.jitter_ms,
-//                 non_vp_stats.num_connections_reused,
-//                 (non_vp_stats.tile_count > 0) ?
-//                 (non_vp_stats.num_connections_reused * 100.0 / non_vp_stats.tile_count) : 0,
-//                 non_vp_stats.total_redirects, non_vp_stats.avg_redirect_time_ms);
-
-//         fclose(csv_file);
-//     }
-
-//     for(int i=0; i < total_jobs; i++) {
-//         if(url_buffers[i]) free(url_buffers[i]);
-//     }
-//     free(url_buffers);
-//     free(jobs);
-
-//     return RET_SUCCESS;
-// }
-
-// RET request_handler_v2_reset(request_handler_v2_t *self) {
-//     if (!self) return RET_FAIL;
-
-//     for (COUNT i = 0; i < self->tile_count; i++) {
-//         buffer_destroy(&self->data[i]);
-//         buffer_init(&self->data[i]);
-
-//         self->dls[i] = 0;
-//         self->cnnt[i] = 0;
-//         self->pre_trans_time[i] = 0;
-//         self->start_trans_time[i] = 0;
-//         self->total_time[i] = 0;
-//         self->size_dl[i] = 0;
-//         self->namelookup_time[i] = 0;
-//         self->appconnect_time[i] = 0;
-//         self->redirect_time[i] = 0;
-//         self->header_size[i] = 0;
-//         self->redirect_count[i] = 0;
-//         self->connection_reused[i] = 0;
-//     }
-
-//     return RET_SUCCESS;
-// }
-
-// RET request_handler_v2_destroy(request_handler_v2_t *self) {
-//     if (!self) return RET_FAIL;
-
-//     if(self->pool) {
-//         http_pool_destroy(self->pool);
-//         free(self->pool);
-//     }
-
-//     if (self->data) {
-//         for (COUNT i = 0; i < self->tile_count; i++) {
-//             buffer_destroy(&self->data[i]);
-//         }
-//         free(self->data);
-//     }
-
-//     free(self->dls);
-//     free(self->cnnt);
-//     free(self->pre_trans_time);
-//     free(self->start_trans_time);
-//     free(self->total_time);
-//     free(self->size_dl);
-//     free(self->namelookup_time);
-//     free(self->appconnect_time);
-//     free(self->redirect_time);
-//     free(self->header_size);
-//     free(self->redirect_count);
-//     free(self->connection_reused);
-
-//     memset(self, 0, sizeof(request_handler_v2_t));
-//     return RET_SUCCESS;
-// }
-
-// int tile_version_to_num(int version)
-// {
-//   switch (version)
-//   {
-//   case 0:
-//     return 38;
-//     break;
-//   case 1:
-//     return 32;
-//     break;
-//   case 2:
-//     return 28;
-//     break;
-//   case 3:
-//     return 24;
-//     break;
-//   case 4:
-//     return 20;
-//     break;
-//   default:
-//     break;
-//   }
-// }
-
-/**
- * request_handler_v2.c  (updated — Tasks 3 & 4)
- *
- * Changes from the original:
- *
- *   1. request_handler_v2_init()
- *      Allocates p_map[] alongside the existing metric arrays.
- *
- *   2. request_handler_v2_post_get_info()
- *      • If self->sched_output is non-NULL, chosen quality levels come from
- *        sched_output->tiles[tile_id].chosen_version (stochastic scheduler).
- *      • Each download_task_t.prob_ptr is pointed at self->p_map[tile_id]
- *        so http_pool's polling loop can perform early termination in real
- *        time when viewport probability drops below τ.
- *      • After the parallel download, counts tiles marked RET_EARLY_TERMINATED
- *        and accumulates them in self->early_term_count.
- *
- *   3. request_handler_v2_update_pmap()
- *      Copies a fresh probability array into self->p_map.
- *
- *   4. request_handler_v2_reset() / destroy()
- *      Reset / free p_map together with the other arrays.
- */
-
 #include "proto_comp/request_handler_v2.h"
 #include "proto_comp/viewport_prediction.h" /* wrap_angle_360, clamp_pitch */
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
+#include <time.h>
 #include "proto_comp/http_pool.h"
 #include "proto_comp/resource_monitor.h"
 
@@ -537,6 +15,46 @@
 #ifndef VP_HALF_PITCH
 #define VP_HALF_PITCH (VIEWPORT_HEIGHT_DEGREES / 2.0f) /* 45° */
 #endif
+
+/* The build selects a dataset, so each binary requests tile names that match
+ * the video it was built to evaluate. */
+#define VIDEO_DATASET_CUTROPE 1
+#define VIDEO_DATASET_DIVING  2
+#define VIDEO_DATASET_UFO     3
+
+#ifndef VIDEO_DATASET
+#define VIDEO_DATASET VIDEO_DATASET_CUTROPE
+#endif
+
+#if VIDEO_DATASET == VIDEO_DATASET_CUTROPE
+#define VIDEO_PATH_PREFIX "Class2_CutRope/Class2_CutRope"
+#define VIDEO_TILE_RESOLUTION "480x341.333333333333"
+#elif VIDEO_DATASET == VIDEO_DATASET_DIVING
+#define VIDEO_PATH_PREFIX "Class1_Diving/Class1_Diving"
+#define VIDEO_TILE_RESOLUTION "480x320"
+#elif VIDEO_DATASET == VIDEO_DATASET_UFO
+#define VIDEO_PATH_PREFIX "Class2_UFO/Class2_UFO"
+#define VIDEO_TILE_RESOLUTION "480x320"
+#else
+#error "Unsupported VIDEO_DATASET"
+#endif
+
+/* CURLINFO_TOTAL_TIME_T is per transfer.  Tiles are fetched concurrently, so
+ * summing that value does not represent the elapsed time of a segment. */
+static count_time_t monotonic_time_us(void)
+{
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+        return 0;
+    return (count_time_t)ts.tv_sec * 1000000LL + ts.tv_nsec / 1000LL;
+}
+
+static double segment_throughput_mbps(uint64_t bytes, count_time_t wall_us)
+{
+    return (wall_us > 0)
+               ? ((double)bytes * 8.0 / (double)wall_us)
+               : 0.0;
+}
 
 /* ── init ─────────────────────────────────────────────────────────────── */
 RET request_handler_v2_init(request_handler_v2_t *self,
@@ -792,8 +310,8 @@ RET request_handler_v2_post_get_info(request_handler_v2_t *self,
         int qp = tile_version_to_num(ver);
 
         snprintf(ubuf, sizeof(ubuf),
-                 "%s/Class3_RollerCoaster/Class3_RollerCoaster_%llu"
-                 "/erp_8x6/tile_yuv/tile_%d_%d_480x341.333333333333_QP%d.bin",
+                 "%s/" VIDEO_PATH_PREFIX "_%llu"
+                 "/erp_8x6/tile_yuv/tile_%d_%d_" VIDEO_TILE_RESOLUTION "_QP%d.bin",
                  self->ser_addr, chunk_id + 1,
                  tid / NO_OF_COLS, tid % NO_OF_COLS, qp);
 
@@ -829,8 +347,8 @@ RET request_handler_v2_post_get_info(request_handler_v2_t *self,
         int qp = tile_version_to_num(ver);
 
         snprintf(ubuf, sizeof(ubuf),
-                 "%s/Class3_RollerCoaster/Class3_RollerCoaster_%llu"
-                 "/erp_8x6/tile_yuv/tile_%d_%d_480x341.333333333333_QP%d.bin",
+                 "%s/" VIDEO_PATH_PREFIX "_%llu"
+                 "/erp_8x6/tile_yuv/tile_%d_%d_" VIDEO_TILE_RESOLUTION "_QP%d.bin",
                  self->ser_addr, chunk_id + 1,
                  tid / NO_OF_COLS, tid % NO_OF_COLS, qp);
 
@@ -858,6 +376,8 @@ RET request_handler_v2_post_get_info(request_handler_v2_t *self,
     printf("[POOL] %d VP + %d non-VP tiles (tau=%.3f)\n",
            num_vp_tiles, nvc, self->pool->early_term_tau);
 
+    count_time_t segment_start_us = monotonic_time_us();
+
     // if (http_pool_get_parallel(self->pool, jobs, total_jobs,
     //                            self->max_parallel_downloads) != RET_SUCCESS) {
     //     fprintf(stderr, "[rh_v2] download failed\n");
@@ -879,8 +399,16 @@ RET request_handler_v2_post_get_info(request_handler_v2_t *self,
         return RET_FAIL;
     }
 
-    /* count early-terminated tiles */
+    count_time_t segment_end_us = monotonic_time_us();
+    count_time_t segment_wall_us =
+        (segment_end_us > segment_start_us)
+            ? (segment_end_us - segment_start_us)
+            : 0;
+
+    /* Count transfers cancelled by ET separately from requests that the
+     * adaptive resource gate never admitted. */
     int et = 0;
+    int gated = 0;
     for (int i = 0; i < total_jobs; i++)
     {
         if (jobs[i].status == RET_EARLY_TERMINATED)
@@ -890,12 +418,18 @@ RET request_handler_v2_post_get_info(request_handler_v2_t *self,
                 ((cts_tile_t *)&self->cts_out->tiles[jobs[i].tile_id])
                     ->early_terminated = 1;
         }
+        else if (jobs[i].status == RET_RESOURCE_GATED)
+        {
+            gated++;
+        }
     }
     self->early_term_count += et;
     if (et)
         printf("[ET] %d tile(s) early-terminated this segment "
                "(total=%d)\n",
                et, self->early_term_count);
+    if (gated)
+        printf("[STAGE-2] %d tile(s) left deferred by the PSI gate\n", gated);
 
     /* statistics */
     tile_group_stats_t vp_s, nv_s;
@@ -903,17 +437,16 @@ RET request_handler_v2_post_get_info(request_handler_v2_t *self,
     calc_group_stats(self, non_vp, nvc, &nv_s);
 
     int64_t total_bytes = (int64_t)vp_s.total_size + (int64_t)nv_s.total_size;
-    count_time_t total_us = vp_s.total_time + nv_s.total_time;
     int all_tiles = vp_s.tile_count + nv_s.tile_count;
     int all_reused = vp_s.num_connections_reused + nv_s.num_connections_reused;
 
-    printf("[SEG %llu] Proto=%s Tiles=%d(VP:%d NV:%d ET:%d) "
+    printf("[SEG %llu] Proto=%s Tiles=%d(VP:%d NV:%d ET:%d Gated:%d) "
            "Size=%.2fMB Time=%.2fms Tput=%.2fMbps Reuse=%.1f%%\n",
            chunk_id + 1, pname,
-           all_tiles, vp_s.tile_count, nv_s.tile_count, et,
+           all_tiles, vp_s.tile_count, nv_s.tile_count, et, gated,
            total_bytes / 1048576.0,
-           total_us / 1000.0,
-           (total_us > 0) ? (total_bytes * 8.0 / (total_us / 1e6) / 1e6) : 0.0,
+           segment_wall_us / 1000.0,
+           segment_throughput_mbps((uint64_t)total_bytes, segment_wall_us),
            (all_tiles > 0) ? (all_reused * 100.0 / all_tiles) : 0.0);
     printf("====================================\n\n");
 
@@ -961,15 +494,15 @@ RET request_handler_v2_post_get_info(request_handler_v2_t *self,
         fprintf(csv, "%llu,%s,viewport,%d,%.4f,%.4f,%.4f,%.2f,%.1f,%d\n",
                 chunk_id + 1, pname, vp_s.tile_count,
                 vp_s.total_size / 1048576.0,
-                vp_s.avg_download_speed / 1e6,
-                vp_s.total_time / 1000.0, vp_s.jitter_ms,
+                segment_throughput_mbps(vp_s.total_size, segment_wall_us),
+                segment_wall_us / 1000.0, vp_s.jitter_ms,
                 (vp_s.tile_count > 0) ? (vp_s.num_connections_reused * 100.0 / vp_s.tile_count) : 0.0,
                 et);
         fprintf(csv, "%llu,%s,non-vp,%d,%.4f,%.4f,%.4f,%.2f,%.1f,0\n",
                 chunk_id + 1, pname, nv_s.tile_count,
                 nv_s.total_size / 1048576.0,
-                nv_s.avg_download_speed / 1e6,
-                nv_s.total_time / 1000.0, nv_s.jitter_ms,
+                segment_throughput_mbps(nv_s.total_size, segment_wall_us),
+                segment_wall_us / 1000.0, nv_s.jitter_ms,
                 (nv_s.tile_count > 0) ? (nv_s.num_connections_reused * 100.0 / nv_s.tile_count) : 0.0);
         fprintf(csv, "%llu,%s,summary,%.4f,%.4f\n",
                 chunk_id + 1, pname, wasted_ratio, qoe_drop_rate);
@@ -983,7 +516,370 @@ RET request_handler_v2_post_get_info(request_handler_v2_t *self,
     return RET_SUCCESS;
 }
 
-/* ── reset ───────────────────────────────────────────────────────────── */
+/* ── Two-Stage Dispatch ─────────────────────────────────────────────────
+ *
+ * Stage 1 — HIGH PRIORITY (core_tiles[0..n_core-1]):
+ *   Các tile thuộc vùng 90×90° dự đoán được tải NGAY LẬP TỨC, không bị
+ *   Early Terminate dù p_i rớt xuống.  early_term_tau được đặt = 0 khi
+ *   poll Stage 1 để đảm bảo điều này.
+ *
+ * Stage 2 — RESOURCE PROBING + ET (các tile còn lại trong vp_tiles,
+ *   không thuộc core):
+ *   Được dispatch SAU KHI Stage 1 hoàn thành.  early_term_tau của pool
+ *   được khôi phục; bất kỳ tile Stage 2 nào có *prob_ptr < tau_final sẽ
+ *   bị RESET_STREAM.
+ *
+ * Tham số:
+ *   core_tiles / n_core  — mảng tile ID lõi 90×90° (Stage 1)
+ *   vp_tiles   / n_vp    — toàn bộ tile có p_i >= 0.15 từ build_vp_list
+ *                           (bao gồm cả core; hàm tự lọc phần giao)
+ * ----------------------------------------------------------------------- */
+static RET request_handler_v2_post_get_info_two_stage_legacy(
+        request_handler_v2_t *self,
+        COUNT chunk_id,
+        int  *core_tiles,   int n_core,
+        int  *vp_tiles,     int num_vp_tiles,
+        int  *chosen_versions,
+        float actual_yaw,   float actual_pitch,
+        HTTP_VERSION protocol)
+{
+    if (!self || !self->pool)
+        return RET_FAIL;
+
+    const char *pname = (protocol == STREAM_HTTP_2_0) ? "HTTP/2"
+                      : (protocol == STREAM_HTTP_3_0) ? "HTTP/3"
+                      : "HTTP/1.1";
+
+    printf("\n========== SEGMENT %llu (%s) [Two-Stage] ==========\n",
+           chunk_id + 1, pname);
+
+    /* ── Xây dựng lookup để kiểm tra tile có thuộc core không ── */
+    bool is_core[NO_OF_ROWS * NO_OF_COLS];
+    memset(is_core, 0, sizeof(is_core));
+    for (int i = 0; i < n_core; i++)
+        if (core_tiles[i] >= 0 && core_tiles[i] < (int)(NO_OF_ROWS * NO_OF_COLS))
+            is_core[core_tiles[i]] = true;
+
+    /* ── Xây dựng Stage 2: vp_tiles \ core_tiles ── */
+    int stage2_tiles[NO_OF_ROWS * NO_OF_COLS];
+    int n_stage2 = 0;
+    for (int i = 0; i < num_vp_tiles; i++) {
+        if (!is_core[vp_tiles[i]])
+            stage2_tiles[n_stage2++] = vp_tiles[i];
+    }
+
+    /* ── Xây dựng danh sách non-VP (tiles không trong vp_tiles nào) ── */
+    bool in_vp_list[NO_OF_ROWS * NO_OF_COLS];
+    memset(in_vp_list, 0, sizeof(in_vp_list));
+    for (int i = 0; i < num_vp_tiles; i++)
+        if (vp_tiles[i] >= 0)
+            in_vp_list[vp_tiles[i]] = true;
+
+    int non_vp[NO_OF_ROWS * NO_OF_COLS], nvc = 0;
+    for (COUNT tid = 0; tid < self->tile_count; tid++)
+        if (!in_vp_list[tid])
+            non_vp[nvc++] = (int)tid;
+
+    count_time_t segment_start_us = monotonic_time_us();
+
+    /* ─────────────────────────────────────────────────────────────────
+     * STAGE 1: Tải core tiles NGAY LẬP TỨC, không Early Terminate
+     * ───────────────────────────────────────────────────────────────── */
+    printf("[STAGE-1] Dispatching %d core tiles (90x90, no ET)...\n", n_core);
+
+    if (n_core > 0) {
+        download_task_t *s1_jobs = (download_task_t *)calloc(n_core, sizeof(*s1_jobs));
+        char           **s1_urls = (char **)calloc(n_core, sizeof(char *));
+        if (!s1_jobs || !s1_urls) {
+            free(s1_jobs); free(s1_urls);
+            return RET_FAIL;
+        }
+
+        char ubuf[512];
+        for (int i = 0; i < n_core; i++) {
+            int tid = core_tiles[i];
+            int ver = (self->cts_out)
+                      ? self->cts_out->tiles[tid].chosen_version
+                      : (chosen_versions ? chosen_versions[i] : 0);
+            int qp  = tile_version_to_num(ver);
+
+            snprintf(ubuf, sizeof(ubuf),
+                     "%s/" VIDEO_PATH_PREFIX "_%llu"
+                     "/erp_8x6/tile_yuv/tile_%d_%d_" VIDEO_TILE_RESOLUTION "_QP%d.bin",
+                     self->ser_addr, chunk_id + 1,
+                     tid / NO_OF_COLS, tid % NO_OF_COLS, qp);
+
+
+            s1_urls[i]             = strdup(ubuf);
+            s1_jobs[i].url         = s1_urls[i];
+            s1_jobs[i].tile_id     = tid;
+            s1_jobs[i].status      = RET_FAIL;
+            /* Stage 1 KHÔNG dùng ET: prob_ptr = NULL */
+            s1_jobs[i].prob_ptr    = NULL;
+
+            s1_jobs[i].data              = &self->data[tid];
+            s1_jobs[i].dls               = &self->dls[tid];
+            s1_jobs[i].cnnt              = &self->cnnt[tid];
+            s1_jobs[i].pre_trans_time    = &self->pre_trans_time[tid];
+            s1_jobs[i].start_trans_time  = &self->start_trans_time[tid];
+            s1_jobs[i].total_time        = &self->total_time[tid];
+            s1_jobs[i].size_dl           = &self->size_dl[tid];
+            s1_jobs[i].namelookup_time   = &self->namelookup_time[tid];
+            s1_jobs[i].appconnect_time   = &self->appconnect_time[tid];
+            s1_jobs[i].redirect_time     = &self->redirect_time[tid];
+            s1_jobs[i].header_size       = &self->header_size[tid];
+            s1_jobs[i].redirect_count    = &self->redirect_count[tid];
+            s1_jobs[i].connection_reused = &self->connection_reused[tid];
+        }
+
+        /* Tạm thời vô hiệu hoá ET cho Stage 1 */
+        float saved_tau = self->pool->early_term_tau;
+        self->pool->early_term_tau = 0.0f;
+
+        RET s1_ret = http_pool_get_parallel(self->pool, s1_jobs, n_core,
+                                            self->max_parallel_downloads);
+
+        /* Khôi phục tau cho Stage 2 */
+        self->pool->early_term_tau = saved_tau;
+
+        for (int i = 0; i < n_core; i++) free(s1_urls[i]);
+        free(s1_urls);
+        free(s1_jobs);
+
+        if (s1_ret != RET_SUCCESS) {
+            fprintf(stderr, "[rh_v2] Stage 1 download failed\n");
+            return RET_FAIL;
+        }
+        printf("[STAGE-1] Done.\n");
+    }
+
+    /* ─────────────────────────────────────────────────────────────────
+     * STAGE 2: Tải các tile còn lại (Stage 2 + non-VP), áp dụng ET
+     * ───────────────────────────────────────────────────────────────── */
+    int n_stage2_total = n_stage2 + nvc;
+    printf("[STAGE-2] Dispatching %d tiles (stage2=%d + non-vp=%d, ET=%.3f)...\n",
+           n_stage2_total, n_stage2, nvc, self->pool->early_term_tau);
+
+    int et = 0;   /* early-terminated counter (chỉ tính Stage 2) */
+
+    if (n_stage2_total > 0) {
+        download_task_t *s2_jobs = (download_task_t *)calloc(n_stage2_total, sizeof(*s2_jobs));
+        char           **s2_urls = (char **)calloc(n_stage2_total, sizeof(char *));
+        if (!s2_jobs || !s2_urls) {
+            free(s2_jobs); free(s2_urls);
+            return RET_FAIL;
+        }
+
+        char ubuf[512];
+
+        /* Stage 2A: các vp_tiles ngoài core */
+        for (int i = 0; i < n_stage2; i++) {
+            int tid = stage2_tiles[i];
+            int ver = (self->cts_out)
+                      ? self->cts_out->tiles[tid].chosen_version
+                      : 0;
+            int qp  = tile_version_to_num(ver);
+
+            snprintf(ubuf, sizeof(ubuf),
+                     "%s/" VIDEO_PATH_PREFIX "_%llu"
+                     "/erp_8x6/tile_yuv/tile_%d_%d_" VIDEO_TILE_RESOLUTION "_QP%d.bin",
+                     self->ser_addr, chunk_id + 1,
+                     tid / NO_OF_COLS, tid % NO_OF_COLS, qp);
+
+            s2_urls[i]             = strdup(ubuf);
+            s2_jobs[i].url         = s2_urls[i];
+            s2_jobs[i].tile_id     = tid;
+            s2_jobs[i].status      = RET_FAIL;
+            /* Stage 2 DÙNG ET: gắn prob_ptr để polling vòng lặp có thể cắt */
+            s2_jobs[i].prob_ptr    = (self->p_map) ? &self->p_map[tid] : NULL;
+
+            s2_jobs[i].data              = &self->data[tid];
+            s2_jobs[i].dls               = &self->dls[tid];
+            s2_jobs[i].cnnt              = &self->cnnt[tid];
+            s2_jobs[i].pre_trans_time    = &self->pre_trans_time[tid];
+            s2_jobs[i].start_trans_time  = &self->start_trans_time[tid];
+            s2_jobs[i].total_time        = &self->total_time[tid];
+            s2_jobs[i].size_dl           = &self->size_dl[tid];
+            s2_jobs[i].namelookup_time   = &self->namelookup_time[tid];
+            s2_jobs[i].appconnect_time   = &self->appconnect_time[tid];
+            s2_jobs[i].redirect_time     = &self->redirect_time[tid];
+            s2_jobs[i].header_size       = &self->header_size[tid];
+            s2_jobs[i].redirect_count    = &self->redirect_count[tid];
+            s2_jobs[i].connection_reused = &self->connection_reused[tid];
+        }
+
+        /* Stage 2B: non-VP tiles */
+        for (int i = 0; i < nvc; i++) {
+            int tid = non_vp[i];
+            int ji  = n_stage2 + i;
+            int ver = (self->cts_out)
+                      ? self->cts_out->tiles[tid].chosen_version
+                      : 0;
+            int qp  = tile_version_to_num(ver);
+
+            snprintf(ubuf, sizeof(ubuf),
+                     "%s/" VIDEO_PATH_PREFIX "_%llu"
+                     "/erp_8x6/tile_yuv/tile_%d_%d_" VIDEO_TILE_RESOLUTION "_QP%d.bin",
+                     self->ser_addr, chunk_id + 1,
+                     tid / NO_OF_COLS, tid % NO_OF_COLS, qp);
+
+            s2_urls[ji]             = strdup(ubuf);
+            s2_jobs[ji].url         = s2_urls[ji];
+            s2_jobs[ji].tile_id     = tid;
+            s2_jobs[ji].status      = RET_FAIL;
+            s2_jobs[ji].prob_ptr    = (self->p_map) ? &self->p_map[tid] : NULL;
+
+            s2_jobs[ji].data              = &self->data[tid];
+            s2_jobs[ji].dls               = &self->dls[tid];
+            s2_jobs[ji].cnnt              = &self->cnnt[tid];
+            s2_jobs[ji].pre_trans_time    = &self->pre_trans_time[tid];
+            s2_jobs[ji].start_trans_time  = &self->start_trans_time[tid];
+            s2_jobs[ji].total_time        = &self->total_time[tid];
+            s2_jobs[ji].size_dl           = &self->size_dl[tid];
+            s2_jobs[ji].namelookup_time   = &self->namelookup_time[tid];
+            s2_jobs[ji].appconnect_time   = &self->appconnect_time[tid];
+            s2_jobs[ji].redirect_time     = &self->redirect_time[tid];
+            s2_jobs[ji].header_size       = &self->header_size[tid];
+            s2_jobs[ji].redirect_count    = &self->redirect_count[tid];
+            s2_jobs[ji].connection_reused = &self->connection_reused[tid];
+        }
+
+        /* Dùng http_pool_get_parallel (ET được nhúng vào polling loop trong
+         * http_pool_get_parallel_et_only — xem bên dưới).
+         * Nếu muốn dùng hàm có sẵn, dùng http_pool_get_parallel và kiểm tra
+         * prob_ptr TRƯỚC khi dispatch (pre-filter ET). */
+        RET s2_ret = http_pool_get_parallel_et(self->pool, s2_jobs, n_stage2_total,
+                                               self->max_parallel_downloads);
+
+        /* Đếm ET từ Stage 2 */
+        for (int i = 0; i < n_stage2_total; i++) {
+            if (s2_jobs[i].status == RET_EARLY_TERMINATED) {
+                et++;
+                if (self->cts_out)
+                    ((cts_tile_t *)&self->cts_out->tiles[s2_jobs[i].tile_id])
+                        ->early_terminated = 1;
+            }
+        }
+
+        for (int i = 0; i < n_stage2_total; i++) free(s2_urls[i]);
+        free(s2_urls);
+        free(s2_jobs);
+
+        if (s2_ret != RET_SUCCESS)
+            fprintf(stderr, "[rh_v2] Stage 2 download failed (some ET may apply)\n");
+    }
+
+    count_time_t segment_end_us = monotonic_time_us();
+    count_time_t segment_wall_us =
+        (segment_end_us > segment_start_us)
+            ? (segment_end_us - segment_start_us)
+            : 0;
+
+    self->early_term_count += et;
+    if (et)
+        printf("[ET] %d Stage-2 tile(s) early-terminated (total=%d)\n",
+               et, self->early_term_count);
+
+    /* ── Statistics (dùng lại core_tiles như "vp_tiles" cho nhóm VP) ── */
+    tile_group_stats_t vp_s, nv_s;
+    calc_group_stats(self, core_tiles, n_core, &vp_s);
+    calc_group_stats(self, non_vp, nvc, &nv_s);
+
+    int64_t      total_bytes = (int64_t)vp_s.total_size + (int64_t)nv_s.total_size;
+    int          all_tiles   = vp_s.tile_count  + nv_s.tile_count;
+    int          all_reused  = vp_s.num_connections_reused + nv_s.num_connections_reused;
+
+    printf("[SEG %llu] Proto=%s Tiles=%d(Core:%d S2:%d NV:%d ET:%d) "
+           "Size=%.2fMB Time=%.2fms Tput=%.2fMbps Reuse=%.1f%%\n",
+           chunk_id + 1, pname,
+           all_tiles, vp_s.tile_count, n_stage2, nv_s.tile_count, et,
+           total_bytes / 1048576.0,
+           segment_wall_us / 1000.0,
+           segment_throughput_mbps((uint64_t)total_bytes, segment_wall_us),
+           (all_tiles > 0) ? (all_reused * 100.0 / all_tiles) : 0.0);
+    printf("====================================\n\n");
+
+    /* Wasted ratio & QoE drop (giữ nguyên logic cũ) */
+    long long total_dl = 0, wasted = 0;
+    int actual_vp_count = 0, qoe_dropped = 0;
+
+    for (int i = 0; i < (int)self->tile_count; i++) {
+        bool in_vp = is_tile_in_actual_viewport(i, actual_yaw, actual_pitch);
+        if (in_vp) actual_vp_count++;
+
+        if (self->size_dl[i] > 0) {
+            total_dl += self->size_dl[i];
+            if (!in_vp) wasted += self->size_dl[i];
+        }
+        if (in_vp && self->cts_out && self->cts_out->tiles[i].early_terminated)
+            qoe_dropped++;
+    }
+
+    float wasted_ratio  = (total_dl > 0)         ? ((float)wasted     / total_dl)         : 0.0f;
+    float qoe_drop_rate = (actual_vp_count > 0)   ? ((float)qoe_dropped / actual_vp_count) : 0.0f;
+
+    printf("[METRICS] Wasted Ratio: %.2f%% | QoE Drop Rate: %.2f%%\n",
+           wasted_ratio * 100.0f, qoe_drop_rate * 100.0f);
+
+    /* CSV */
+    FILE *csv = fopen("http_metrics_v2.csv", "a");
+    if (csv) {
+        if (ftell(csv) == 0)
+            fprintf(csv, "seg,proto,type,tiles,size_mb,speed_mbps,"
+                         "total_ms,jitter_ms,reuse_pct,et\n");
+        fprintf(csv, "%llu,%s,core-vp,%d,%.4f,%.4f,%.4f,%.2f,%.1f,0\n",
+                chunk_id + 1, pname, vp_s.tile_count,
+                vp_s.total_size / 1048576.0,
+                segment_throughput_mbps(vp_s.total_size, segment_wall_us),
+                segment_wall_us / 1000.0, vp_s.jitter_ms,
+                (vp_s.tile_count > 0)
+                    ? (vp_s.num_connections_reused * 100.0 / vp_s.tile_count)
+                    : 0.0);
+        fprintf(csv, "%llu,%s,non-vp,%d,%.4f,%.4f,%.4f,%.2f,%.1f,0\n",
+                chunk_id + 1, pname, nv_s.tile_count,
+                nv_s.total_size / 1048576.0,
+                segment_throughput_mbps(nv_s.total_size, segment_wall_us),
+                segment_wall_us / 1000.0, nv_s.jitter_ms,
+                (nv_s.tile_count > 0)
+                    ? (nv_s.num_connections_reused * 100.0 / nv_s.tile_count)
+                    : 0.0);
+        fprintf(csv, "%llu,%s,summary,%.4f,%.4f\n",
+                chunk_id + 1, pname, wasted_ratio, qoe_drop_rate);
+        fclose(csv);
+    }
+
+    return RET_SUCCESS;
+}
+
+/* Adaptive PSI-gated two-stage entry point. */
+RET request_handler_v2_post_get_info_two_stage(
+        request_handler_v2_t *self,
+        COUNT chunk_id,
+        int  *core_tiles,   int n_core,
+        int  *vp_tiles,     int num_vp_tiles,
+        int  *chosen_versions,
+        float actual_yaw,   float actual_pitch,
+        HTTP_VERSION protocol,
+        resource_monitor_t *rm)
+{
+    if (rm) {
+        /* The dynamic pool owns the stage boundary: p_i >= 0.50 is sent
+         * immediately and p_i < 0.50 is PSI-gated while Stage 1 is active. */
+        return request_handler_v2_post_get_info(self, chunk_id,
+                                                vp_tiles, num_vp_tiles,
+                                                chosen_versions,
+                                                actual_yaw, actual_pitch,
+                                                protocol, rm);
+    }
+
+    /* Compatibility fallback for callers that do not provide PSI. */
+    return request_handler_v2_post_get_info_two_stage_legacy(
+            self, chunk_id, core_tiles, n_core,
+            vp_tiles, num_vp_tiles, chosen_versions,
+            actual_yaw, actual_pitch, protocol);
+}
+
+/* Reset per-segment request state. */
 RET request_handler_v2_reset(request_handler_v2_t *self)
 {
     if (!self)
@@ -1060,8 +956,8 @@ RET request_handler_v2_post_get_info_no_rm(request_handler_v2_t *self,
         int qp = tile_version_to_num(ver);
 
         snprintf(ubuf, sizeof(ubuf),
-                 "%s/Class3_RollerCoaster/Class3_RollerCoaster_%llu"
-                 "/erp_8x6/tile_yuv/tile_%d_%d_480x341.333333333333_QP%d.bin",
+                 "%s/" VIDEO_PATH_PREFIX "_%llu"
+                 "/erp_8x6/tile_yuv/tile_%d_%d_" VIDEO_TILE_RESOLUTION "_QP%d.bin",
                  self->ser_addr, chunk_id + 1,
                  tid / NO_OF_COLS, tid % NO_OF_COLS, qp);
 
@@ -1097,8 +993,8 @@ RET request_handler_v2_post_get_info_no_rm(request_handler_v2_t *self,
         int qp = tile_version_to_num(ver);
 
         snprintf(ubuf, sizeof(ubuf),
-                 "%s/Class3_RollerCoaster/Class3_RollerCoaster_%llu"
-                 "/erp_8x6/tile_yuv/tile_%d_%d_480x341.333333333333_QP%d.bin",
+                 "%s/" VIDEO_PATH_PREFIX "_%llu"
+                 "/erp_8x6/tile_yuv/tile_%d_%d_" VIDEO_TILE_RESOLUTION "_QP%d.bin",
                  self->ser_addr, chunk_id + 1,
                  tid / NO_OF_COLS, tid % NO_OF_COLS, qp);
 
@@ -1126,6 +1022,8 @@ RET request_handler_v2_post_get_info_no_rm(request_handler_v2_t *self,
     printf("[POOL] %d VP + %d non-VP tiles (tau=%.3f)\n",
            num_vp_tiles, nvc, self->pool->early_term_tau);
 
+    count_time_t segment_start_us = monotonic_time_us();
+
     // if (http_pool_get_parallel(self->pool, jobs, total_jobs,
     //                            self->max_parallel_downloads) != RET_SUCCESS) {
     //     fprintf(stderr, "[rh_v2] download failed\n");
@@ -1146,6 +1044,12 @@ RET request_handler_v2_post_get_info_no_rm(request_handler_v2_t *self,
         free(jobs);
         return RET_FAIL;
     }
+
+    count_time_t segment_end_us = monotonic_time_us();
+    count_time_t segment_wall_us =
+        (segment_end_us > segment_start_us)
+            ? (segment_end_us - segment_start_us)
+            : 0;
 
     /* count early-terminated tiles */
     int et = 0;
@@ -1171,7 +1075,6 @@ RET request_handler_v2_post_get_info_no_rm(request_handler_v2_t *self,
     calc_group_stats(self, non_vp, nvc, &nv_s);
 
     int64_t total_bytes = (int64_t)vp_s.total_size + (int64_t)nv_s.total_size;
-    count_time_t total_us = vp_s.total_time + nv_s.total_time;
     int all_tiles = vp_s.tile_count + nv_s.tile_count;
     int all_reused = vp_s.num_connections_reused + nv_s.num_connections_reused;
 
@@ -1180,8 +1083,8 @@ RET request_handler_v2_post_get_info_no_rm(request_handler_v2_t *self,
            chunk_id + 1, pname,
            all_tiles, vp_s.tile_count, nv_s.tile_count, et,
            total_bytes / 1048576.0,
-           total_us / 1000.0,
-           (total_us > 0) ? (total_bytes * 8.0 / (total_us / 1e6) / 1e6) : 0.0,
+           segment_wall_us / 1000.0,
+           segment_throughput_mbps((uint64_t)total_bytes, segment_wall_us),
            (all_tiles > 0) ? (all_reused * 100.0 / all_tiles) : 0.0);
     printf("====================================\n\n");
 
@@ -1229,15 +1132,15 @@ RET request_handler_v2_post_get_info_no_rm(request_handler_v2_t *self,
         fprintf(csv, "%llu,%s,viewport,%d,%.4f,%.4f,%.4f,%.2f,%.1f,%d\n",
                 chunk_id + 1, pname, vp_s.tile_count,
                 vp_s.total_size / 1048576.0,
-                vp_s.avg_download_speed / 1e6,
-                vp_s.total_time / 1000.0, vp_s.jitter_ms,
+                segment_throughput_mbps(vp_s.total_size, segment_wall_us),
+                segment_wall_us / 1000.0, vp_s.jitter_ms,
                 (vp_s.tile_count > 0) ? (vp_s.num_connections_reused * 100.0 / vp_s.tile_count) : 0.0,
                 et);
         fprintf(csv, "%llu,%s,non-vp,%d,%.4f,%.4f,%.4f,%.2f,%.1f,0\n",
                 chunk_id + 1, pname, nv_s.tile_count,
                 nv_s.total_size / 1048576.0,
-                nv_s.avg_download_speed / 1e6,
-                nv_s.total_time / 1000.0, nv_s.jitter_ms,
+                segment_throughput_mbps(nv_s.total_size, segment_wall_us),
+                segment_wall_us / 1000.0, nv_s.jitter_ms,
                 (nv_s.tile_count > 0) ? (nv_s.num_connections_reused * 100.0 / nv_s.tile_count) : 0.0);
         fprintf(csv, "%llu,%s,summary,%.4f,%.4f\n",
                 chunk_id + 1, pname, wasted_ratio, qoe_drop_rate);

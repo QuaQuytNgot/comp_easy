@@ -28,12 +28,14 @@
 #define SERVER_ADDR              "https://192.168.101.17:8443"
 #define TOTAL_SEGMENTS           10
 #define VP_HISTORY_SZ            20
+#ifndef PROTOCOL
 #define PROTOCOL                 STREAM_HTTP_3_0
+#endif
 #define TAU_EARLY_TERM           0.00f  /* ĐÃ SỬA: Tắt ET từ lúc khởi tạo */
 #define VP_HALF_YAW              (VIEWPORT_WIDTH_DEGREES  / 2.0f)
 #define VP_HALF_PITCH            (VIEWPORT_HEIGHT_DEGREES / 2.0f)
 #define SACCADE_THRESHOLD_DEG_S  30.0f
-#define ACTIVE_ALGORITHM         SCHEDULER_SALIENTVR
+#define ACTIVE_ALGORITHM         SCHEDULER_MOSAIC
 
 /* Bandwidth initialized in bits/s to match VIDEO_BIT_RATE[] */
 #define BW_INIT_BITS_S           35000000.0f    /* 0.5 Mbps */

@@ -45,7 +45,9 @@
 #define SERVER_ADDR          "https://192.168.101.17:8443"
 #define TOTAL_SEGMENTS       10
 #define VP_HISTORY_SZ        20
-#define PROTOCOL             STREAM_HTTP_2_0
+#ifndef PROTOCOL
+#define PROTOCOL             STREAM_HTTP_3_0
+#endif
 #define RHO_SYS_WARN         0.80f
 #define VP_HALF_YAW          (VIEWPORT_WIDTH_DEGREES  / 2.0f)
 #define VP_HALF_PITCH        (VIEWPORT_HEIGHT_DEGREES / 2.0f)
@@ -53,13 +55,13 @@
 #define BW_INIT_BITS_S       35000000.0f   /* 35 Mbps initial estimate */
 
 /* BOLA360 parameters */
-#define BOLA_V               3.0f   /* Lyapunov parameter V */
+#define BOLA_V               15.0f   /* Lyapunov parameter V */
 #define BOLA_GAMMA           0.2f   /* utility floor scaling γ */
 #define BOLA_DELTA           SEGMENT_DURATION  /* δ = 1s */
 #define BOLA_NUM_Q           5      /* must match CTS_NUM_QUALITIES */
 
 /* VP tile detection threshold */
-#define BOLA_VP_THRESHOLD    0.15f
+#define BOLA_VP_THRESHOLD    0.02f
 
 /* ── QoE constants ──────────────────────────────────────────────────────── */
 #define MAX_TILE_BITRATE_KBPS  2000.0f

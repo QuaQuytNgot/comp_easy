@@ -1,103 +1,3 @@
-// /*
-//  * cts_scheduler.c  —  Coordinated Tile Scheduler (CTS)
-//  *
-//  * Three algorithms share a single cts_schedule() entry point:
-//  *
-//  * ── GREEDY ──────────────────────────────────────────────────────────────────
-//  *   Phase 1 – QoE guarantee: reserve quality-0 bandwidth for all VP tiles
-//  *             (p_i ≥ CTS_P_VP_THRESHOLD).
-//  *   Phase 2 – Priority sort: rank by  (p_i · ΔQ_max) / C_proc  desc.
-//  *   Phase 3 – Greedy upgrade: walk sorted list; for each tile try raising
-//  *             quality one level at a time while marginal utility > 0 and
-//  *             BW + CPU budgets are not exceeded.
-//  *
-//  * ── RA-MPC ───────────────────────────────────────────────────────────────────
-//  *   Paper objective (Section V-A, minimise over horizon H):
-//  *     Σ_{k=t}^{t+H} [ −E[QoE_k]  +  λ1·|Δr_k|  +  λ2·Risk(B_k, τ) ]
-//  *
-//  *   Implementation: per-tile exhaustive search over quality levels.
-//  *   For each candidate quality v we simulate H buffer steps and compute
-//  *   the H-step score.  We pick the v that maximises the accumulated score.
-//  *   Budget (BW, CPU) is tracked across tiles; tiles are processed in
-//  *   descending probability order so high-value tiles get first pick.
-//  *
-//  *   Budget accounting: every tile consumes VIDEO_BIT_RATE[v] bytes/s.
-//  *   We pre-deduct the base (quality-0) cost for all tiles so Phase 3
-//  *   upgrades only need to account for the *incremental* BW delta.
-//  *
-//  * ── SLR ──────────────────────────────────────────────────────────────────────
-//  *   Paper Lagrangian (Section V-B, maximise):
-//  *     L = Σ p_i·Q(r_i)
-//  *         − λ·(Σ r_i  − B̂)
-//  *         − μ·(Σ C_proc_i − τ_CPU)
-//  *         − γ·Risk(B, τ)
-//  *
-//  *   Dual decomposition: each tile solved independently.
-//  *   Per-tile marginal:  ΔL_i(v) = (p_i − λ)·Q(v) − μ·C_proc(v)
-//  *
-//  *   After every segment a subgradient step updates λ, μ, γ so the
-//  *   multipliers converge to reflect actual resource pressure:
-//  *     λ ← max(0, λ + η·(Σr_i − B̂))          bandwidth slack
-//  *     μ ← max(0, μ + η·(Σcpu_i − τ_CPU))     CPU slack
-//  *     γ ← max(0, γ + η·Risk(B_actual, τ))    QoE risk
-//  *
-//  *   CTS step 4 (Section V-D): when μ spikes (CPU overload), the caller
-//  *   should reduce the download batch size.  We signal this via
-//  *   out->total_cpu_load > CTS_SLR_TAU_CPU.
-//  *
-//  * Bug-fixes vs previous version:
-//  *   1. RA-MPC: quality-0 base cost is now pre-deducted from both bw_left
-//  *      and cpu_left before the per-tile upgrade loop, so tiles that remain
-//  *      at quality 0 correctly consume bandwidth.
-//  *   2. aggregate_output: total_bw_used / total_cpu_load are always recomputed
-//  *      from the final chosen_version values (consistent for all algorithms).
-//  *      The SLR objective value (set inside run_slr) is preserved.
-//  */
-
-/*
- * BOLA360 adaptive bitrate algorithm implementation
- *
- * Reference:
- *   Zeynali, Sahebdel, Hajiesmaili, Sitaraman.
- *   "BOLA360: Near-optimal View and Bitrate Adaptation for 360-degree Video
- *   Streaming," ACM Trans. Multimedia Comput. Commun. Appl. 22(3):62, 2026.
- *   https://doi.org/10.1145/3785137
- *
- * See abr_bola360.h for the full algorithm description and API contract.
- *
- * ── Unit conventions ─────────────────────────────────────────────────────────
- *
- *   VIDEO_BIT_RATE[]   throughput / quality proxy in the same unit family as
- *                      in->bandwidth (bytes/s or bits/s — ratio only matters).
- *   buffer_level       seconds of buffered playback.
- *   delta              SEGMENT_DURATION seconds.
- *   s_norm_m           dimensionless ratio R_m / R_0  (δ cancels in score).
- *   score              dimensionless — argmax is taken, not the absolute value.
- *
- * ── Key equations ─────────────────────────────────────────────────────────────
- *
- *   Utility (paper Table 1, §4.3):
- *     v_m = log₂(2 · R_m / R_0)
- *
- *   Tile size (normalised):
- *     s̃_m = R_m / R_0                    (S_m / S_0, segment duration cancels)
- *
- *   Per-tile score (Eq. 5a, decomposed because tiles are independent):
- *     score(d, m) = [ V · (v_m · p_d  +  γ·δ)  −  Q(t_k)/δ ]  /  s̃_m
- *
- *   Idle threshold (Theorem 4.1):
- *     idle_thresh = V · δ · (v_M  +  γ·δ)
- *     where v_M = v_util[CTS_NUM_QUALITIES − 1]
- *
- *   V upper bound (Eq. 5c):
- *     V_max = (Q_max/δ − D) / (v_M + γ·δ)
- *
- *   BOLA360-PL per-tile bitrate cap (§6):
- *     S_lim  = Q(t) · 0.5 · w_p(t) / D          [same unit as R_m · δ]
- *     R_cap  = S_lim / δ  =  0.5 · Q(t) · bandwidth / (D · δ)
- *     → max quality: largest m with R_m ≤ R_cap
- */
-
 #include "proto_comp/cts_scheduler.h"
 #include <stdlib.h>
 #include <string.h>
@@ -171,18 +71,19 @@ static float calc_spatial_smoothness(int tile_id, int chosen_v, const int *prev_
     int cols = 8;
     int rows = 6;
 
-    if(N != cols * rows)    return 0.0f;
+    if (N != cols * rows)
+        return 0.0f;
 
     int r = tile_id / cols;
     int c = tile_id % cols;
 
     int neighbors[4];
     int num_neighbors = 0;
-    
+
     neighbors[num_neighbors++] = r * cols + (c - 1 + cols) % cols;
     neighbors[num_neighbors++] = r * cols + (c + 1) % cols;
 
-    if(r < rows - 1)
+    if (r < rows - 1)
     {
         neighbors[num_neighbors++] = (r + 1) * cols + c;
     }
@@ -463,9 +364,8 @@ static RET run_slr(const cts_input_t *in, cts_output_t *out, slr_state_t *slr)
             }
 
             /* L = p*U(v) - λ*C_bw(v) - μ*C_cpu(v) - γ*C_bw(v) */
-            float dl = (p * utility) - (slr->lambda * cost_bw) - 
-                        (slr->mu * cp_norm) - (slr->gamma * risk_norm)
-                        - (slr->beta_smooth * s_vi);
+            float dl = (p * utility) - (slr->lambda * cost_bw) -
+                       (slr->mu * cp_norm) - (slr->gamma * risk_norm) - (slr->beta_smooth * s_vi);
 
             if (dl > best_dl)
             {
@@ -491,7 +391,8 @@ static RET run_slr(const cts_input_t *in, cts_output_t *out, slr_state_t *slr)
         float chosen_cost_bw = out->tiles[i].quality_bps / ref;
         sum_pq += in->p_map[i] * logf(chosen_cost_bw + 1.0f);
 
-        if (in->prev_versions) {
+        if (in->prev_versions)
+        {
             sum_s += calc_spatial_smoothness(i, out->tiles[i].chosen_version, in->prev_versions, N);
         }
     }
@@ -499,9 +400,7 @@ static RET run_slr(const cts_input_t *in, cts_output_t *out, slr_state_t *slr)
     /* Objective value logging (use clamped risk here so objective isn't artificially inflated) */
     float actual_risk = (buffer_slack_for_update > 0.0f) ? buffer_slack_for_update : 0.0f;
 
-    out->objective_value = sum_pq - slr->lambda * (sum_r - in->bandwidth) / ref 
-                        - slr->mu * (sum_cpu - CTS_SLR_TAU_CPU * (float)N) 
-                        - slr->gamma * actual_risk - slr->beta_smooth * (sum_s - CTS_SLR_TAU_SMOOTH);
+    out->objective_value = sum_pq - slr->lambda * (sum_r - in->bandwidth) / ref - slr->mu * (sum_cpu - CTS_SLR_TAU_CPU * (float)N) - slr->gamma * actual_risk - slr->beta_smooth * (sum_s - CTS_SLR_TAU_SMOOTH);
 
     printf("[SLR] λ=%.4f μ=%.4f γ=%.4f  Obj=%.2f  Σr=%.2f Mbps  Σcpu=%.3f\n",
            slr->lambda, slr->mu, slr->gamma,
@@ -522,7 +421,8 @@ static RET run_slr(const cts_input_t *in, cts_output_t *out, slr_state_t *slr)
     if (in->is_fluctuating)
     {
         slr->beta_smooth += eta * norm_smooth_slack;
-    } else 
+    }
+    else
     {
         slr->beta_smooth = 0.0f;
     }
@@ -749,7 +649,8 @@ static void compute_v_util(float v_util[CTS_NUM_QUALITIES])
 {
     float r0 = (float)VIDEO_BIT_RATE[0];
 
-    for (int m = 0; m < CTS_NUM_QUALITIES; m++) {
+    for (int m = 0; m < CTS_NUM_QUALITIES; m++)
+    {
         float ratio = 2.0f * (float)VIDEO_BIT_RATE[m] / r0;
         v_util[m] = (ratio > 0.0f) ? log2f(ratio) : 0.0f;
     }
@@ -765,7 +666,8 @@ static void compute_s_norm(float s_norm[CTS_NUM_QUALITIES])
 {
     float r0 = (float)VIDEO_BIT_RATE[0];
 
-    for (int m = 0; m < CTS_NUM_QUALITIES; m++) {
+    for (int m = 0; m < CTS_NUM_QUALITIES; m++)
+    {
         s_norm[m] = (float)VIDEO_BIT_RATE[m] / r0;
     }
 }
@@ -785,10 +687,15 @@ static void compute_s_norm(float s_norm[CTS_NUM_QUALITIES])
  */
 static float derive_V(float v_M, float gamma, float delta, int tile_count)
 {
-    float q_max     = (float)MAX_BUFFER_SIZE;          /* seconds             */
-    float q_over_d  = q_max / delta;                   /* Q_max / δ           */
-    float numerator = q_over_d - (float)tile_count;    /* Q_max/δ − D         */
-    float denom     = v_M + gamma * delta;             /* v_M + γδ            */
+    float q_max     = (float)MAX_BUFFER_SIZE;          /* seconds (playback time) */
+    float q_over_d  = q_max / delta;                   /* Q_max / δ */
+    
+    /* FIX: Vì q_max đang là thời gian playback, một chunk tải xong 
+     * chỉ làm buffer tăng thêm 1 khoảng delta. Do đó ta trừ đi 1.0f 
+     * thay vì tile_count. */
+    float numerator = q_over_d - 1.0f;                 
+
+    float denom     = v_M + gamma * delta;             /* v_M + γδ */
 
     if (numerator <= 0.0f || denom <= 0.0f) {
         /* Configuration too tight; fall back to a minimal safe V. */
@@ -815,17 +722,19 @@ static float derive_V(float v_M, float gamma, float delta, int tile_count)
 static int pl_cap_quality(float buffer_level, float bandwidth,
                           int tile_count, float delta)
 {
-    if (tile_count <= 0 || delta <= 0.0f) return 0;
+    if (tile_count <= 0 || delta <= 0.0f)
+        return 0;
 
     /* R_cap in the same units as VIDEO_BIT_RATE */
-    float s_lim = buffer_level * (BOLA360_PL_BW_FACTOR * bandwidth)
-                  / (float)tile_count;
+    float s_lim = buffer_level * (BOLA360_PL_BW_FACTOR * bandwidth) / (float)tile_count;
     float r_cap = s_lim / delta;
 
     /* Find the highest m whose bitrate does not exceed r_cap. */
     int cap = 0;
-    for (int m = 0; m < CTS_NUM_QUALITIES; m++) {
-        if ((float)VIDEO_BIT_RATE[m] <= r_cap) {
+    for (int m = 0; m < CTS_NUM_QUALITIES; m++)
+    {
+        if ((float)VIDEO_BIT_RATE[m] <= r_cap)
+        {
             cap = m;
         }
     }
@@ -835,15 +744,16 @@ static int pl_cap_quality(float buffer_level, float bandwidth,
 /* ── public API ──────────────────────────────────────────────────────────── */
 
 void bola360_state_init(bola360_state_t *state,
-                        int              tile_count,
-                        float            gamma,
-                        int              pl_enabled)
+                        int tile_count,
+                        float gamma,
+                        int pl_enabled)
 {
-    if (!state) return;
+    if (!state)
+        return;
     memset(state, 0, sizeof(*state));
 
-    state->gamma      = (gamma > 0.0f) ? gamma : BOLA360_GAMMA_DEFAULT;
-    state->delta      = (float)SEGMENT_DURATION;
+    state->gamma = (gamma > 0.0f) ? gamma : BOLA360_GAMMA_DEFAULT;
+    state->delta = (float)SEGMENT_DURATION;
     state->pl_enabled = pl_enabled;
 
     /* Precompute utility and size tables. */
@@ -854,17 +764,17 @@ void bola360_state_init(bola360_state_t *state,
      * The caller can override state->V afterwards if a specific value is needed
      * (e.g. to trade off playback delay vs. QoE per Remark 2 in the paper). */
     float v_M = state->v_util[CTS_NUM_QUALITIES - 1];
-    state->V  = (tile_count > 0)
-                ? derive_V(v_M, state->gamma, state->delta, tile_count)
-                : 0.1f;
+    state->V = (tile_count > 0)
+                   ? derive_V(v_M, state->gamma, state->delta, tile_count)
+                   : 0.1f;
 
-    state->last_idle           = 0;
+    state->last_idle = 0;
     state->last_idle_threshold = 0.0f;
 }
 
 RET abr_bola360_run(const cts_input_t *in,
-                    cts_output_t      *out,
-                    bola360_state_t   *state)
+                    cts_output_t *out,
+                    bola360_state_t *state)
 {
     /* ── argument validation ────────────────────────────────────────────── */
     if (!in || !out || !out->tiles || !in->p_map || !state)
@@ -872,13 +782,13 @@ RET abr_bola360_run(const cts_input_t *in,
     if (in->tile_count <= 0 || state->V <= 0.0f || state->delta <= 0.0f)
         return RET_FAIL;
 
-    int   N     = in->tile_count;
-    float Q     = in->buffer_level;   /* Q(t_k) in seconds                   */
-    float V     = state->V;
+    int N = in->tile_count;
+    float Q = in->buffer_level; /* Q(t_k) in seconds                   */
+    float V = state->V;
     float gamma = state->gamma;
     float delta = state->delta;
 
-    out->tile_count      = N;
+    out->tile_count = N;
     out->objective_value = 0.0f;
 
     /* ── precompute idle threshold (Theorem 4.1) ────────────────────────── *
@@ -888,11 +798,12 @@ RET abr_bola360_run(const cts_input_t *in,
      * If Q exceeds this, BOLA360 enters the idle state: downloading any tile
      * at any quality would produce a negative score (buffer already saturated).
      */
-    float v_M        = state->v_util[CTS_NUM_QUALITIES - 1];
+    float v_M = state->v_util[CTS_NUM_QUALITIES - 1];
     float idle_thresh = V * delta * (v_M + gamma * delta);
     state->last_idle_threshold = idle_thresh;
 
-    if (Q > idle_thresh) {
+    if (Q > idle_thresh)
+    {
         /*
          * Idle state (§4.1): skip all tiles.
          * Set every tile to quality 0 and mark early_terminated so the caller
@@ -901,20 +812,21 @@ RET abr_bola360_run(const cts_input_t *in,
          */
         state->last_idle = 1;
 
-        for (int i = 0; i < N; i++) {
-            cts_tile_t *t       = &out->tiles[i];
-            t->tile_id          = i;
-            t->probability      = in->p_map[i];
-            t->chosen_version   = 0;
-            t->quality_bps      = (float)VIDEO_BIT_RATE[0];
-            t->c_proc           = cts_cproc(0, in->protocol, in->c_proc_global);
-            t->load_cpu         = cts_load_cpu(0, in->protocol);
-            t->net_utility      = 0.0f;
-            t->early_terminated = 1;   /* signal: do NOT issue download        */
+        for (int i = 0; i < N; i++)
+        {
+            cts_tile_t *t = &out->tiles[i];
+            t->tile_id = i;
+            t->probability = in->p_map[i];
+            t->chosen_version = 0;
+            t->quality_bps = (float)VIDEO_BIT_RATE[0];
+            t->c_proc = cts_cproc(0, in->protocol, in->c_proc_global);
+            t->load_cpu = cts_load_cpu(0, in->protocol);
+            t->net_utility = 0.0f;
+            t->early_terminated = 1; /* signal: do NOT issue download        */
         }
 
         /* Aggregate fields — meaningful even in idle so the caller can report. */
-        out->total_bw_used  = 0.0f;
+        out->total_bw_used = 0.0f;
         out->total_cpu_load = 0.0f;
         out->vp_avg_quality = 0.0f;
 
@@ -934,8 +846,9 @@ RET abr_bola360_run(const cts_input_t *in,
      * This prevents download overrun during start-up / seek (§6).
      * Only active when state->pl_enabled = 1 and bandwidth is known.
      */
-    int pl_max = CTS_NUM_QUALITIES - 1;   /* default: uncapped                  */
-    if (state->pl_enabled && in->bandwidth > 0.0f) {
+    int pl_max = CTS_NUM_QUALITIES - 1; /* default: uncapped                  */
+    if (state->pl_enabled && in->bandwidth > 0.0f)
+    {
         pl_max = pl_cap_quality(Q, in->bandwidth, N, delta);
     }
 
@@ -949,18 +862,19 @@ RET abr_bola360_run(const cts_input_t *in,
      *
      *   If the best score is ≤ 0, tile d is not downloaded (early_terminated).
      */
-    float Q_over_delta = Q / delta;          /* Q(t_k)/δ — reused per tile    */
-    float sum_pq       = 0.0f;              /* Σ p_d · v_{m*(d)} → U_K term   */
-    float sum_bw       = 0.0f;              /* Σ R_{m*(d)}                     */
-    float sum_cpu      = 0.0f;              /* Σ load_cpu_d                    */
-    float vp_q         = 0.0f;
-    int   vp_cnt       = 0;
+    float Q_over_delta = Q / delta; /* Q(t_k)/δ — reused per tile    */
+    float sum_pq = 0.0f;            /* Σ p_d · v_{m*(d)} → U_K term   */
+    float sum_bw = 0.0f;            /* Σ R_{m*(d)}                     */
+    float sum_cpu = 0.0f;           /* Σ load_cpu_d                    */
+    float vp_q = 0.0f;
+    int vp_cnt = 0;
 
-    for (int i = 0; i < N; i++) {
+    for (int i = 0; i < N; i++)
+    {
         cts_tile_t *t = &out->tiles[i];
 
-        t->tile_id          = i;
-        t->probability      = in->p_map[i];
+        t->tile_id = i;
+        t->probability = in->p_map[i];
         t->early_terminated = 0;
 
         float p = in->p_map[i];
@@ -981,21 +895,23 @@ RET abr_bola360_run(const cts_input_t *in,
          * numerator shrinks, naturally pushing selection down toward quality 0.
          */
         float best_score = -1e30f;
-        int   best_m     = -1;      /* -1 = no profitable quality found        */
+        int best_m = -1; /* -1 = no profitable quality found        */
 
-        for (int m = 0; m <= pl_max; m++) {
+        for (int m = 0; m <= pl_max; m++)
+        {
             /* ── Guard: s̃_m must be positive ────────────────────────── */
             float s_m = state->s_norm[m];
-            if (s_m <= 0.0f) continue;
+            if (s_m <= 0.0f)
+                continue;
 
             /* ── Core BOLA360 score ──────────────────────────────────── */
-            float numerator = V * (state->v_util[m] * p + gamma * delta)
-                              - Q_over_delta;
-            float score     = numerator / s_m;
+            float numerator = V * (state->v_util[m] * p + gamma * delta) - Q_over_delta;
+            float score = numerator / s_m;
 
-            if (score > best_score) {
+            if (score > best_score)
+            {
                 best_score = score;
-                best_m     = m;
+                best_m = m;
             }
         }
 
@@ -1008,34 +924,36 @@ RET abr_bola360_run(const cts_input_t *in,
          * Practically: set to quality 0 and flag early_terminated = 1 so the
          * download scheduler skips issuing the QUIC stream for this tile.
          */
-        if (best_m < 0 || best_score <= BOLA360_SCORE_EPSILON) {
-            t->chosen_version   = 0;
-            t->quality_bps      = (float)VIDEO_BIT_RATE[0];
-            t->c_proc           = cts_cproc(0, in->protocol, in->c_proc_global);
-            t->load_cpu         = cts_load_cpu(0, in->protocol);
-            t->net_utility      = 0.0f;
+        if (best_m < 0 || best_score <= BOLA360_SCORE_EPSILON)
+        {
+            t->chosen_version = 0;
+            t->quality_bps = (float)VIDEO_BIT_RATE[0];
+            t->c_proc = cts_cproc(0, in->protocol, in->c_proc_global);
+            t->load_cpu = cts_load_cpu(0, in->protocol);
+            t->net_utility = 0.0f;
             t->early_terminated = 1;
             continue;
         }
 
         /* ── Accept the selected quality ────────────────────────────────── */
-        t->chosen_version   = best_m;
-        t->quality_bps      = (float)VIDEO_BIT_RATE[best_m];
-        t->c_proc           = cts_cproc(best_m, in->protocol, in->c_proc_global);
-        t->load_cpu         = cts_load_cpu(best_m, in->protocol);
+        t->chosen_version = best_m;
+        t->quality_bps = (float)VIDEO_BIT_RATE[best_m];
+        t->c_proc = cts_cproc(best_m, in->protocol, in->c_proc_global);
+        t->load_cpu = cts_load_cpu(best_m, in->protocol);
         /*
          * net_utility stores the raw BOLA360 score for this tile.
          * It is used by cts_print_schedule() and can be compared across tiles
          * to understand how the algorithm allocated quality.
          */
-        t->net_utility      = best_score;
+        t->net_utility = best_score;
 
         /* Accumulate U_K: expected playback utility for this segment. */
-        sum_pq  += p * state->v_util[best_m];
-        sum_bw  += t->quality_bps;
+        sum_pq += p * state->v_util[best_m];
+        sum_bw += t->quality_bps;
         sum_cpu += t->load_cpu;
 
-        if (p >= CTS_P_VP_THRESHOLD) {
+        if (p >= CTS_P_VP_THRESHOLD)
+        {
             vp_q += t->quality_bps;
             vp_cnt++;
         }
@@ -1052,9 +970,9 @@ RET abr_bola360_run(const cts_input_t *in,
      * BOLA360 is converging toward the optimal U_K* value.
      */
     out->objective_value = sum_pq;
-    out->total_bw_used   = sum_bw;
-    out->total_cpu_load  = sum_cpu;
-    out->vp_avg_quality  = (vp_cnt > 0) ? (vp_q / (float)vp_cnt) : 0.0f;
+    out->total_bw_used = sum_bw;
+    out->total_cpu_load = sum_cpu;
+    out->vp_avg_quality = (vp_cnt > 0) ? (vp_q / (float)vp_cnt) : 0.0f;
 
     /* ── Diagnostic output ──────────────────────────────────────────────── */
     printf("[BOLA360] Q=%.2fs  idle_thresh=%.2fs  V=%.3f  γ=%.3f  "
@@ -1074,36 +992,43 @@ int abr_bola360_idle(const bola360_state_t *state)
 }
 
 //--------------------------------------------------------------------------------------------------------------------------
-//PANO ALG ----------------------------------------------------------------------
-static float pano_f_v(float speed_deg_s) {
+// PANO ALG ----------------------------------------------------------------------
+static float pano_f_v(float speed_deg_s)
+{
     /* Higher speed = less sensitive = higher JND multiplier */
-    if (speed_deg_s <= 0.0f) return 1.0f;
-    return 1.0f + 0.05f * speed_deg_s; 
+    if (speed_deg_s <= 0.0f)
+        return 1.0f;
+    return 1.0f + 0.05f * speed_deg_s;
 }
 
-static float pano_f_l(float lum_change) {
+static float pano_f_l(float lum_change)
+{
     /* Larger change = less sensitive */
-    if (lum_change <= 0.0f) return 1.0f;
+    if (lum_change <= 0.0f)
+        return 1.0f;
     return 1.0f + 0.002f * lum_change;
 }
 
-static float pano_f_d(float dof_diff) {
+static float pano_f_d(float dof_diff)
+{
     /* Greater difference in depth = less sensitive */
-    if (dof_diff <= 0.0f) return 1.0f;
+    if (dof_diff <= 0.0f)
+        return 1.0f;
     return 1.0f + 0.3f * dof_diff;
 }
 
 /* Approximated PSPNR function incorporating 360JND (Equation 1 & 4) */
-static float pano_estimate_pspnr(int quality_level, float p_i, float f_v, float f_l, float f_d) {
+static float pano_estimate_pspnr(int quality_level, float p_i, float f_v, float f_l, float f_d)
+{
     /* Base PSNR proxy based on bitrate scale */
     float base_psnr = 30.0f + (quality_level * 5.0f);
-    
+
     /* Action-dependent ratio A(x1, x2, x3) */
     float a_ratio = f_v * f_l * f_d;
-    
+
     /* 360JND effectively boosts the perceived PSNR score by filtering out imperceptible noise.
        We weight this by the viewport probability p_i to capture spatial attention. */
-    return (base_psnr * a_ratio) * p_i; 
+    return (base_psnr * a_ratio) * p_i;
 }
 
 /* DP Discretization parameters */
@@ -1113,75 +1038,88 @@ static float pano_estimate_pspnr(int quality_level, float p_i, float f_v, float 
 static RET run_pano(const cts_input_t *in, cts_output_t *out)
 {
     int N = in->tile_count;
-    if (N <= 0) return RET_FAIL;
+    if (N <= 0)
+        return RET_FAIL;
 
     /* Base cost calculation */
     float base_bw_total = (float)PANO_MIN_BITRATE * N;
     float bw_budget = in->bandwidth;
 
     /* Phase 1: Initialize to base quality 0 */
-    for (int i = 0; i < N; i++) {
+    for (int i = 0; i < N; i++)
+    {
         cts_tile_t *t = &out->tiles[i];
         t->tile_id = i;
         t->probability = in->p_map[i];
-        t->chosen_version = 4;
-        t->quality_bps = (float)VIDEO_BIT_RATE[4];
+        t->chosen_version = 0;
+        t->quality_bps = (float)VIDEO_BIT_RATE[0];
         t->c_proc = cts_cproc(0, in->protocol, in->c_proc_global);
         t->load_cpu = cts_load_cpu(0, in->protocol);
         t->early_terminated = 0;
         t->net_utility = 0.0f;
     }
 
-    if (bw_budget <= base_bw_total) {
+    if (bw_budget <= base_bw_total)
+    {
         /* Insufficient bandwidth for upgrades; return base allocation */
-        return RET_SUCCESS; 
+        return RET_SUCCESS;
     }
 
     /* Phase 2: Pareto-pruning MCKP via Discrete DP */
     float available_bw = bw_budget - base_bw_total;
     float max_dbw = (float)(VIDEO_BIT_RATE[CTS_NUM_QUALITIES - 1] - VIDEO_BIT_RATE[0]) * N;
-    
+
     /* Scale factor to map bandwidth to discrete buckets */
     float bw_scale = (float)PANO_BW_BUCKETS / (max_dbw > 0 ? max_dbw : 1.0f);
     int max_w = (int)(available_bw * bw_scale);
-    if (max_w > PANO_BW_BUCKETS) max_w = PANO_BW_BUCKETS;
+    if (max_w > PANO_BW_BUCKETS)
+        max_w = PANO_BW_BUCKETS;
 
-    float *dp = (float*)calloc(max_w + 1, sizeof(float));
-    int **choices = (int**)malloc(N * sizeof(int*));
-    if (!dp || !choices) {
-        if(dp) free(dp);
-        if(choices) free(choices);
+    float *dp = (float *)calloc(max_w + 1, sizeof(float));
+    int **choices = (int **)malloc(N * sizeof(int *));
+    if (!dp || !choices)
+    {
+        if (dp)
+            free(dp);
+        if (choices)
+            free(choices);
         return RET_FAIL;
     }
-    
-    for (int i = 0; i < N; i++) {
-        choices[i] = (int*)calloc(max_w + 1, sizeof(int));
+
+    for (int i = 0; i < N; i++)
+    {
+        choices[i] = (int *)calloc(max_w + 1, sizeof(int));
     }
 
     float f_v = pano_f_v(in->viewpoint_speed_deg_s);
 
     /* DP Table Construction */
-    for (int i = 0; i < N; i++) {
+    for (int i = 0; i < N; i++)
+    {
         float f_l = in->tile_lum_change ? pano_f_l(in->tile_lum_change[i]) : 1.0f;
         float f_d = in->tile_dof_diff ? pano_f_d(in->tile_dof_diff[i]) : 1.0f;
         float p_i = in->p_map[i];
 
         /* Traverse backwards to simulate 0/1 knapsack behavior per tile */
-        for (int w = max_w; w >= 0; w--) {
+        for (int w = max_w; w >= 0; w--)
+        {
             float best_pspnr = dp[w];
             int best_v = 0; // Relative to current choice (0 means no upgrade)
 
-            for (int v = 1; v < CTS_NUM_QUALITIES; v++) {
+            for (int v = 1; v < CTS_NUM_QUALITIES; v++)
+            {
                 float dbw = (float)(VIDEO_BIT_RATE[v] - VIDEO_BIT_RATE[0]);
                 int weight = (int)(dbw * bw_scale);
 
-                if (w >= weight) {
-                    float utility_gain = pano_estimate_pspnr(v, p_i, f_v, f_l, f_d) - 
+                if (w >= weight)
+                {
+                    float utility_gain = pano_estimate_pspnr(v, p_i, f_v, f_l, f_d) -
                                          pano_estimate_pspnr(0, p_i, f_v, f_l, f_d);
-                    
+
                     float candidate_pspnr = dp[w - weight] + utility_gain;
-                    
-                    if (candidate_pspnr > best_pspnr) {
+
+                    if (candidate_pspnr > best_pspnr)
+                    {
                         best_pspnr = candidate_pspnr;
                         best_v = v;
                     }
@@ -1194,18 +1132,20 @@ static RET run_pano(const cts_input_t *in, cts_output_t *out)
 
     /* Phase 3: Backtrack to find exact tile assignments */
     int current_w = max_w;
-    for (int i = N - 1; i >= 0; i--) {
+    for (int i = N - 1; i >= 0; i--)
+    {
         int chosen_v = choices[i][current_w];
         out->tiles[i].chosen_version = chosen_v;
         out->tiles[i].quality_bps = (float)VIDEO_BIT_RATE[chosen_v];
         out->tiles[i].c_proc = cts_cproc(chosen_v, in->protocol, in->c_proc_global);
         out->tiles[i].load_cpu = cts_load_cpu(chosen_v, in->protocol);
-        
+
         float f_l = in->tile_lum_change ? pano_f_l(in->tile_lum_change[i]) : 1.0f;
         float f_d = in->tile_dof_diff ? pano_f_d(in->tile_dof_diff[i]) : 1.0f;
         out->tiles[i].net_utility = pano_estimate_pspnr(chosen_v, in->p_map[i], f_v, f_l, f_d);
 
-        if (chosen_v > 0) {
+        if (chosen_v > 0)
+        {
             float dbw = (float)(VIDEO_BIT_RATE[chosen_v] - VIDEO_BIT_RATE[0]);
             current_w -= (int)(dbw * bw_scale);
         }
@@ -1213,7 +1153,8 @@ static RET run_pano(const cts_input_t *in, cts_output_t *out)
 
     /* Cleanup */
     free(dp);
-    for (int i = 0; i < N; i++) free(choices[i]);
+    for (int i = 0; i < N; i++)
+        free(choices[i]);
     free(choices);
 
     return RET_SUCCESS;
@@ -1221,79 +1162,94 @@ static RET run_pano(const cts_input_t *in, cts_output_t *out)
 
 //-----------------------------------------------------------------------------------------------------------------
 
-//SALIENTVR ALG (Nguyên bản theo bài báo MobiCom '22) ---------------------------
+// SALIENTVR ALG (Nguyên bản theo bài báo MobiCom '22) ---------------------------
 #define SVR_ALPHA 0.1f
-#define SVR_BETA  0.5f
-#define SVR_GAMMA 1.0f 
+#define SVR_BETA 0.5f
+#define SVR_GAMMA 1.0f
 
-typedef struct {
+typedef struct
+{
     int orig_idx;
     float saliency;
 } svr_rank_t;
 
-static int cmp_svr_rank(const void *a, const void *b) {
-    float sa = ((svr_rank_t*)a)->saliency;
-    float sb = ((svr_rank_t*)b)->saliency;
-    if (sa < sb) return 1;
-    if (sa > sb) return -1;
+static int cmp_svr_rank(const void *a, const void *b)
+{
+    float sa = ((svr_rank_t *)a)->saliency;
+    float sb = ((svr_rank_t *)b)->saliency;
+    if (sa < sb)
+        return 1;
+    if (sa > sb)
+        return -1;
     return 0;
 }
 
 /* Tính toán hàm mục tiêu: Eq. 1: reward_k = Q_k - alpha*DC_k - beta*DT_k */
-static float calc_svr_reward(int *v, const float *saliency, int last_q, int rows, int cols) {
+static float calc_svr_reward(int *v, const float *saliency, int last_q, int rows, int cols)
+{
     float q_k = 0.0f, dc_k = 0.0f, dt_k = 0.0f;
     int N = rows * cols;
-    
-    for (int j = 0; j < N; j++) {
+
+    for (int j = 0; j < N; j++)
+    {
         float s_j = saliency[j];
-        
+
         /* Quality reward */
         q_k += s_j * (float)v[j];
-        
+
         /* Temporal difference: DC_k */
         float diff_t = (float)abs(v[j] - last_q);
-        dc_k += s_j * s_j * diff_t; 
-        
+        dc_k += s_j * s_j * diff_t;
+
         /* Spatial difference: DT_k */
         int y = j / cols;
         int x = j % cols;
         float local_dt = 0.0f;
         int nei_count = 0;
-        
+
         int left = y * cols + (x - 1 + cols) % cols;
-        local_dt += abs(v[j] - v[left]); nei_count++;
-        
+        local_dt += abs(v[j] - v[left]);
+        nei_count++;
+
         int right = y * cols + (x + 1) % cols;
-        local_dt += abs(v[j] - v[right]); nei_count++;
-        
-        if (y > 0) {
+        local_dt += abs(v[j] - v[right]);
+        nei_count++;
+
+        if (y > 0)
+        {
             int up = (y - 1) * cols + x;
-            local_dt += abs(v[j] - v[up]); nei_count++;
+            local_dt += abs(v[j] - v[up]);
+            nei_count++;
         }
-        if (y < rows - 1) {
+        if (y < rows - 1)
+        {
             int down = (y + 1) * cols + x;
-            local_dt += abs(v[j] - v[down]); nei_count++;
+            local_dt += abs(v[j] - v[down]);
+            nei_count++;
         }
-        
+
         dt_k += (s_j * local_dt) / (float)nei_count;
     }
-    
+
     return q_k - (SVR_ALPHA * dc_k) - (SVR_BETA * dt_k);
 }
 
 static RET run_salientvr(const cts_input_t *in, cts_output_t *out)
 {
     int N = in->tile_count;
-    if (N <= 0) return RET_FAIL;
+    if (N <= 0)
+        return RET_FAIL;
 
-    int cols = NO_OF_COLS; 
+    int cols = NO_OF_COLS;
     int rows = N / cols;
-    if (rows * cols != N) cols = N; 
-    float seg_dur = SEGMENT_DURATION; 
-    
+    if (rows * cols != N)
+        cols = N;
+    float seg_dur = SEGMENT_DURATION;
+
     /* 1. Xếp hạng Saliency để duy trì Ràng buộc Đơn điệu (Monotonicity) */
-    svr_rank_t *rank = (svr_rank_t*)malloc(N * sizeof(svr_rank_t));
-    for (int i = 0; i < N; i++) {
+    svr_rank_t *rank = (svr_rank_t *)malloc(N * sizeof(svr_rank_t));
+    for (int i = 0; i < N; i++)
+    {
         rank[i].orig_idx = i;
         rank[i].saliency = in->p_map[i];
     }
@@ -1301,53 +1257,70 @@ static RET run_salientvr(const cts_input_t *in, cts_output_t *out)
 
     /* 2. Tính toán Ngân sách (Khắc phục Base Cost để không sập mạng) */
     float available_time = in->buffer_level - SVR_GAMMA;
-    if (available_time < 0.0f) available_time = 0.0f;
+    if (available_time < seg_dur)
+    {
+        available_time = seg_dur;
+    }
+    
     float max_size_bits = available_time * in->bandwidth;
     float base_bits_total = N * (float)VIDEO_BIT_RATE[0] * seg_dur;
     float upgrade_budget_bits = max_size_bits - base_bits_total;
 
-    int *best_v   = (int*)calloc(N, sizeof(int));
-    int *cur_v    = (int*)calloc(N, sizeof(int));
-    int *mapped_v = (int*)calloc(N, sizeof(int));
+    int *best_v = (int *)calloc(N, sizeof(int));
+    int *cur_v = (int *)calloc(N, sizeof(int));
+    int *mapped_v = (int *)calloc(N, sizeof(int));
 
     /* Gán cấu trúc tĩnh mặc định */
-    for (int i = 0; i < N; i++) {
+    for (int i = 0; i < N; i++)
+    {
         out->tiles[i].tile_id = i;
         out->tiles[i].probability = in->p_map[i];
         out->tiles[i].c_proc = 0;
-        out->tiles[i].load_cpu = 0; 
+        out->tiles[i].load_cpu = 0;
     }
 
     /* Nếu không đủ mạng, trả về tất cả Version 0 */
-    if (upgrade_budget_bits <= 0.0f) {
-        for (int i = 0; i < N; i++) {
+    if (upgrade_budget_bits <= 0.0f)
+    {
+        for (int i = 0; i < N; i++)
+        {
             out->tiles[i].chosen_version = 0;
             out->tiles[i].quality_bps = (float)VIDEO_BIT_RATE[0];
             out->tiles[i].net_utility = 0.0f;
         }
-        free(rank); free(best_v); free(cur_v); free(mapped_v);
+        free(rank);
+        free(best_v);
+        free(cur_v);
+        free(mapped_v);
         return RET_SUCCESS;
     }
 
     /* 3. GREEDY INITIALIZATION (Tạo điểm khởi đầu tốt cho SA) */
     float current_upgrade_spent = 0.0f;
-    for (int i = 0; i < N; i++) {
-        while (cur_v[i] < CTS_NUM_QUALITIES - 1) {
+    for (int i = 0; i < N; i++)
+    {
+        while (cur_v[i] < CTS_NUM_QUALITIES - 1)
+        {
             float cost_upgrade = (VIDEO_BIT_RATE[cur_v[i] + 1] - VIDEO_BIT_RATE[cur_v[i]]) * seg_dur;
-            
+
             /* Monotonicity check */
-            if (i > 0 && (cur_v[i] + 1) > cur_v[i - 1]) break; 
-            
-            if (current_upgrade_spent + cost_upgrade <= upgrade_budget_bits) {
+            if (i > 0 && (cur_v[i] + 1) > cur_v[i - 1])
+                break;
+
+            if (current_upgrade_spent + cost_upgrade <= upgrade_budget_bits)
+            {
                 cur_v[i]++;
                 current_upgrade_spent += cost_upgrade;
-            } else {
+            }
+            else
+            {
                 break;
             }
         }
     }
 
-    for (int k = 0; k < N; k++) mapped_v[rank[k].orig_idx] = cur_v[k];
+    for (int k = 0; k < N; k++)
+        mapped_v[rank[k].orig_idx] = cur_v[k];
     float cur_reward = calc_svr_reward(mapped_v, in->p_map, in->last_quality, rows, cols);
     float best_reward = cur_reward;
     memcpy(best_v, cur_v, N * sizeof(int));
@@ -1355,47 +1328,61 @@ static RET run_salientvr(const cts_input_t *in, cts_output_t *out)
     /* 4. SIMULATED ANNEALING (Tối ưu hóa Smoothness theo Bài báo) */
     float T = 10.0f;
     float T_min = 0.01f;
-    float alpha_T = 0.99f; 
-    
-    while(T > T_min) {
+    float alpha_T = 0.99f;
+
+    while (T > T_min)
+    {
         int next_v[48];
         memcpy(next_v, cur_v, N * sizeof(int));
-        
+
         int idx = rand() % N;
         int dir = (rand() % 2 == 0) ? 1 : -1;
-        
-        if (dir == 1) {
+
+        if (dir == 1)
+        {
             next_v[idx]++;
-            if (next_v[idx] >= CTS_NUM_QUALITIES) next_v[idx] = CTS_NUM_QUALITIES - 1;
+            if (next_v[idx] >= CTS_NUM_QUALITIES)
+                next_v[idx] = CTS_NUM_QUALITIES - 1;
             /* Ràng buộc đơn điệu: Cascade left */
-            for (int k = idx - 1; k >= 0; k--) {
-                if (next_v[k] < next_v[k+1]) next_v[k] = next_v[k+1];
-            }
-        } else {
-            next_v[idx]--;
-            if (next_v[idx] < 0) next_v[idx] = 0;
-            /* Ràng buộc đơn điệu: Cascade right */
-            for (int k = idx + 1; k < N; k++) {
-                if (next_v[k] > next_v[k-1]) next_v[k] = next_v[k-1];
+            for (int k = idx - 1; k >= 0; k--)
+            {
+                if (next_v[k] < next_v[k + 1])
+                    next_v[k] = next_v[k + 1];
             }
         }
-        
+        else
+        {
+            next_v[idx]--;
+            if (next_v[idx] < 0)
+                next_v[idx] = 0;
+            /* Ràng buộc đơn điệu: Cascade right */
+            for (int k = idx + 1; k < N; k++)
+            {
+                if (next_v[k] > next_v[k - 1])
+                    next_v[k] = next_v[k - 1];
+            }
+        }
+
         /* Kiểm tra ngân sách */
         float test_upgrade_spent = 0.0f;
-        for (int k = 0; k < N; k++) {
+        for (int k = 0; k < N; k++)
+        {
             mapped_v[rank[k].orig_idx] = next_v[k];
             test_upgrade_spent += (VIDEO_BIT_RATE[next_v[k]] - VIDEO_BIT_RATE[0]) * seg_dur;
         }
-        
-        if (test_upgrade_spent <= upgrade_budget_bits) {
+
+        if (test_upgrade_spent <= upgrade_budget_bits)
+        {
             float next_reward = calc_svr_reward(mapped_v, in->p_map, in->last_quality, rows, cols);
             float delta_reward = next_reward - cur_reward;
-            
+
             /* Xác suất chấp nhận của SA */
-            if (delta_reward > 0.0f || ((float)rand() / RAND_MAX) < expf(delta_reward / T)) {
+            if (delta_reward > 0.0f || ((float)rand() / RAND_MAX) < expf(delta_reward / T))
+            {
                 memcpy(cur_v, next_v, N * sizeof(int));
                 cur_reward = next_reward;
-                if (cur_reward > best_reward) {
+                if (cur_reward > best_reward)
+                {
                     best_reward = cur_reward;
                     memcpy(best_v, cur_v, N * sizeof(int));
                 }
@@ -1403,231 +1390,250 @@ static RET run_salientvr(const cts_input_t *in, cts_output_t *out)
         }
         T *= alpha_T;
     }
-    
+
     /* 5. Ánh xạ kết quả cuối cùng ra Out */
-    for (int k = 0; k < N; k++) {
+    for (int k = 0; k < N; k++)
+    {
         int orig = rank[k].orig_idx;
         out->tiles[orig].chosen_version = best_v[k];
         out->tiles[orig].quality_bps = (float)VIDEO_BIT_RATE[best_v[k]];
-        out->tiles[orig].net_utility = best_reward; 
+        out->tiles[orig].net_utility = best_reward;
     }
-    
-    free(rank); free(best_v); free(cur_v); free(mapped_v);
+
+    free(rank);
+    free(best_v);
+    free(cur_v);
+    free(mapped_v);
     return RET_SUCCESS;
 }
 
-// -------------------------------------------------------------------------------------------
 // =========================================================================
-// NEW CODE: MOSAIC IMPLEMENTATION
+// MOSAIC ALG (SELF-CONTAINED STATE VER.)
 // =========================================================================
-
-/* Mosaic QoE Weights based on Section III.A and IV.C */
 #define MOSAIC_GAMMA_1 0.9f
 #define MOSAIC_GAMMA_2 0.3f
-#define MOSAIC_MU_1    3.0f
-#define MOSAIC_MU_2    4.0f
-#define MOSAIC_MU_3    1.0f
-#define MOSAIC_MU_4    2.0f
+#define MOSAIC_MU_1 3.0f
+#define MOSAIC_MU_2 4.0f
+#define MOSAIC_MU_3 1.0f
+#define MOSAIC_MU_4 2.0f
 
-/* Helper to evaluate the expected QoE for a given rate selection array 
- * Translates Equations (1) through (7) from the paper. */
-static float calc_mosaic_qoe(const cts_input_t *in, int *rates, int vp_idx) 
+// 1. Khai báo mảng tĩnh để Mosaic tự theo dõi lịch sử segment
+static int *s_mosaic_prev_versions = NULL;
+static int s_mosaic_prev_n = 0;
+
+// 1. SỬA HÀM TÍNH QOE: Bỏ o_ij, tính điểm QoE toàn cục dựa trên p_j cho mọi tile
+static float calc_mosaic_qoe(const cts_input_t *in, int *rates, const int *actual_prev)
 {
     int N = in->tile_count;
-    int cols = 8; // Assuming 6x8 grid based on N=48
-    int vp_r = vp_idx / cols;
-    int vp_c = vp_idx % cols;
-    
+
     float b_i = 0.0f;
-    float s_i = 0.0f;
-    float r_min = (float)VIDEO_BIT_RATE[0];
-    
     float mean_qp = 0.0f;
     float total_dl_bps = 0.0f;
-    
-    // Equation (1) and (2)
-    for (int j = 0; j < N; j++) {
-        int r = j / cols;
-        int c = j % cols;
-        
-        // Overlap logic (O_ij): approximate viewport as 3x3 tiles wrapping horizontally
-        int c_diff = abs(vp_c - c);
-        if (c_diff > cols / 2) c_diff = cols - c_diff;
-        int o_ij = (abs(vp_r - r) <= 1 && c_diff <= 1) ? 1 : 0;
-        
+
+    float r_min = (float)VIDEO_BIT_RATE[0];
+    if (r_min <= 0.0f)
+        r_min = 1.0f; // Safety fallback
+
+    for (int j = 0; j < N; j++)
+    {
         float p_j = in->p_map[j];
-        int l_j = (rates[j] == -1) ? 1 : 0; // L_j = 1 if skipped
-        float q_r = (rates[j] == -1) ? 0.0f : (float)VIDEO_BIT_RATE[rates[j]];
-        
-        b_i += p_j * q_r * o_ij;
-        s_i += p_j * r_min * l_j;
-        mean_qp += q_r * p_j;
-        
-        if (rates[j] != -1) {
-            total_dl_bps += q_r;
+        float q_r = 0.0f;
+
+        // Tile luôn >= 0 vì đã xóa bỏ cơ chế -1 (Early Terminate)
+        if (rates[j] >= 0)
+        {
+            q_r = (float)VIDEO_BIT_RATE[rates[j]] / r_min;
+            total_dl_bps += (float)VIDEO_BIT_RATE[rates[j]];
         }
+
+        // Tính trực tiếp kỳ vọng chất lượng toàn cục dựa trên xác suất p_j của tile
+        b_i += p_j * q_r;
+        mean_qp += q_r * p_j;
     }
-    
-    // Equation (3)
-    float q_i = MOSAIC_GAMMA_1 * b_i - MOSAIC_GAMMA_2 * s_i;
-    
-    // Equation (4): Quality Variation Within Viewport (E_i)
-    mean_qp /= N;
+
+    // s_i (penalty cho tile bị miss) = 0 vì ta tải toàn bộ 360 độ
+    float q_i = MOSAIC_GAMMA_1 * b_i;
+    mean_qp = (N > 0) ? (mean_qp / N) : 0.0f;
+
     float var = 0.0f;
-    for (int j = 0; j < N; j++) {
-        float q_r = (rates[j] == -1) ? 0.0f : (float)VIDEO_BIT_RATE[rates[j]];
+    for (int j = 0; j < N; j++)
+    {
+        float q_r = (rates[j] >= 0) ? ((float)VIDEO_BIT_RATE[rates[j]] / r_min) : 0.0f;
         float diff = (q_r * in->p_map[j]) - mean_qp;
         var += diff * diff;
     }
     float e_i = sqrtf(var / N);
-    
-    // Equation (6): Rebuffering (T_i)
+
     float dl_time = (in->bandwidth > 0.0f) ? (total_dl_bps / in->bandwidth) : 0.0f;
     float t_i = dl_time - in->buffer_level;
-    if (t_i < 0.0f) t_i = 0.0f;
-    
-    // Equation (5): Quality Variation Across Segments (G_i)
-    float prev_q_i = 0.0f;
-    if (in->prev_versions) {
+    if (t_i < 0.0f)
+        t_i = 0.0f;
+
+    float g_i = 0.0f;
+
+    if (actual_prev)
+    {
         float prev_b_i = 0.0f;
-        for (int j = 0; j < N; j++) {
-            int r = j / cols;
-            int c = j % cols;
-            int c_diff = abs(vp_c - c);
-            if (c_diff > cols / 2) c_diff = cols - c_diff;
-            int o_ij = (abs(vp_r - r) <= 1 && c_diff <= 1) ? 1 : 0;
-            
-            float prev_q_r = (in->prev_versions[j] >= 0) ? (float)VIDEO_BIT_RATE[in->prev_versions[j]] : 0.0f;
-            prev_b_i += in->p_map[j] * prev_q_r * o_ij;
+        for (int j = 0; j < N; j++)
+        {
+            float prev_q_r = 0.0f;
+            if (actual_prev[j] >= 0)
+            {
+                prev_q_r = (float)VIDEO_BIT_RATE[actual_prev[j]] / r_min;
+            }
+            prev_b_i += in->p_map[j] * prev_q_r;
         }
-        prev_q_i = MOSAIC_GAMMA_1 * prev_b_i; // Baseline expectation assumption
+        float prev_q_i = MOSAIC_GAMMA_1 * prev_b_i;
+        g_i = fabsf(q_i - prev_q_i);
     }
-    float g_i = fabsf(q_i - prev_q_i);
-    
-    // Equation (7): Quality of Experience
-    // Note: t_i is multiplied by r_min to align magnitude scales without skewing linear optimization
-    float qoe = MOSAIC_MU_1 * q_i - MOSAIC_MU_2 * (t_i * r_min) - MOSAIC_MU_3 * g_i - MOSAIC_MU_4 * e_i;
-    
-    return qoe;
+
+    return MOSAIC_MU_1 * q_i - MOSAIC_MU_2 * t_i - MOSAIC_MU_3 * g_i - MOSAIC_MU_4 * e_i;
 }
 
-/* Algorithm 2 SelectRates: Viewport-Based Rate Adaptation */
+// 2. SỬA HÀM RUN_MOSAIC: Khởi tạo tất cả tile bằng 0 và bỏ cơ chế Early Terminate
 static RET run_mosaic(const cts_input_t *in, cts_output_t *out)
 {
     int N = in->tile_count;
-    if (N <= 0) return RET_FAIL;
-    int cols = 8; // Assumed 6x8 grid 
-    
-    int *rates = (int*)malloc(N * sizeof(int));
-    int *best_rates = (int*)malloc(N * sizeof(int));
-    int *r_tmp = (int*)malloc(N * sizeof(int));
-    
-    if (!rates || !best_rates || !r_tmp) {
-        if (rates) free(rates);
-        if (best_rates) free(best_rates);
-        if (r_tmp) free(r_tmp);
+    if (N <= 0)
+        return RET_FAIL;
+    int cols = 8;
+
+    // Khởi tạo mảng ghi nhớ nội bộ nếu chưa có
+    if (s_mosaic_prev_versions == NULL || s_mosaic_prev_n != N)
+    {
+        if (s_mosaic_prev_versions)
+            free(s_mosaic_prev_versions);
+        s_mosaic_prev_versions = (int *)malloc(N * sizeof(int));
+        // SỬA: Đặt base version là 0 thay vì -1
+        for (int i = 0; i < N; i++)
+            s_mosaic_prev_versions[i] = 0;
+        s_mosaic_prev_n = N;
+    }
+
+    const int *actual_prev = in->prev_versions ? in->prev_versions : s_mosaic_prev_versions;
+
+    int *rates = (int *)malloc(N * sizeof(int));
+    int *best_rates = (int *)malloc(N * sizeof(int));
+    int *r_tmp = (int *)malloc(N * sizeof(int));
+
+    if (!rates || !best_rates || !r_tmp)
+    {
+        if (rates)
+            free(rates);
+        if (best_rates)
+            free(best_rates);
+        if (r_tmp)
+            free(r_tmp);
         return RET_FAIL;
     }
 
-    // Line 2: Rates = {0,0..0} (We use -1 to denote L_j=1 / skipped)
-    for (int i = 0; i < N; i++) {
-        rates[i] = -1;
-        best_rates[i] = -1;
+    // 1. KHỞI TẠO TẤT CẢ TILE Ở BASE QUALITY (Version 0)
+    float base_bw = 0.0f;
+    for (int i = 0; i < N; i++)
+    {
+        rates[i] = 0;
+        best_rates[i] = 0;
+        base_bw += (float)VIDEO_BIT_RATE[0];
     }
 
-    float max_qoe = -1e30f;
+    // 2. Điểm QoE nền tảng với mọi tile ở version 0
+    float max_qoe = calc_mosaic_qoe(in, rates, actual_prev);
     int is_updated = 1;
-    
-    // Line 4: while Rates is updated
-    while (is_updated) {
+
+    // Nếu chỉ tải Base Quality đã vượt băng thông, bỏ qua vòng lặp nâng cấp
+    if (base_bw > in->bandwidth)
+    {
         is_updated = 0;
-        
-        // Line 6: for i <- 1 to V do (simulate candidate viewports over all tile centers)
-        for (int i = 0; i < N; i++) {
+    }
+
+    // Vòng lặp Greedy Knapsack
+    while (is_updated)
+    {
+        is_updated = 0;
+
+        for (int i = 0; i < N; i++)
+        {
             memcpy(r_tmp, rates, N * sizeof(int));
-            
+
             int vp_r = i / cols;
             int vp_c = i % cols;
             int upgrade_attempted = 0;
-            
-            // Line 8: for j <- 1 to N do
-            for (int j = 0; j < N; j++) {
+
+            for (int j = 0; j < N; j++)
+            {
                 int r = j / cols;
                 int c = j % cols;
                 int c_diff = abs(vp_c - c);
-                if (c_diff > cols / 2) c_diff = cols - c_diff;
-                
-                // Line 9: if O_{i,j} > 0
-                if (abs(vp_r - r) <= 1 && c_diff <= 1) {
-                    // Line 10: R <- Increase to next rates available
-                    if (r_tmp[j] < CTS_NUM_QUALITIES - 1) {
+                if (c_diff > cols / 2)
+                    c_diff = cols - c_diff;
+
+                // Thử nâng cấp 1 khối 3x3
+                if (abs(vp_r - r) <= 1 && c_diff <= 1)
+                {
+                    if (r_tmp[j] < CTS_NUM_QUALITIES - 1)
+                    {
                         r_tmp[j]++;
                         upgrade_attempted = 1;
                     }
                 }
             }
-            
-            if (!upgrade_attempted) continue;
-            
-            // Line 12: Capacity check D(R_j)(1 - L_j) > C
-            float total_dl_bps = 0.0f;
-            for (int j = 0; j < N; j++) {
-                if (r_tmp[j] != -1) {
-                    total_dl_bps += (float)VIDEO_BIT_RATE[r_tmp[j]];
-                }
-            }
-            
-            if (total_dl_bps > in->bandwidth) {
-                // Line 13: continue; /* too aggressive. */
+
+            if (!upgrade_attempted)
                 continue;
+
+            // Check băng thông
+            float total_dl_bps = 0.0f;
+            for (int j = 0; j < N; j++)
+            {
+                total_dl_bps += (float)VIDEO_BIT_RATE[r_tmp[j]];
             }
-            
-            // Line 15: QoE = \mu_1 Q_i - \mu_2 T_i - \mu_3 G_i - \mu_4 E_i
-            float current_qoe = calc_mosaic_qoe(in, r_tmp, i);
-            
-            // Line 16: if QoE > max
-            if (current_qoe > max_qoe) {
+
+            if (total_dl_bps > in->bandwidth)
+                continue;
+
+            // Gọi hàm tính điểm QoE đã được sửa để đánh giá TOÀN CỤC
+            float current_qoe = calc_mosaic_qoe(in, r_tmp, actual_prev);
+
+            if (current_qoe > max_qoe)
+            {
                 max_qoe = current_qoe;
                 memcpy(best_rates, r_tmp, N * sizeof(int));
-                is_updated = 1; // Line 18: isSelected = True
+                is_updated = 1;
             }
         }
-        
-        if (is_updated) {
-            // Line 20: Rates <- R /* update optimal rates */
+
+        if (is_updated)
+        {
             memcpy(rates, best_rates, N * sizeof(int));
         }
     }
-    
-    // Assign mapped rates to the output structures
-    for (int i = 0; i < N; i++) {
+
+    // Trích xuất kết quả
+    for (int i = 0; i < N; i++)
+    {
         cts_tile_t *t = &out->tiles[i];
         t->tile_id = i;
         t->probability = in->p_map[i];
-        
-        if (rates[i] == -1) {
-            t->chosen_version = 0;
-            t->quality_bps = 0.0f;
-            t->c_proc = 0.0f;
-            t->load_cpu = 0.0f;
-            t->early_terminated = 1; // Mark skipped (L_j=1)
-        } else {
-            t->chosen_version = rates[i];
-            t->quality_bps = (float)VIDEO_BIT_RATE[rates[i]];
-            t->c_proc = cts_cproc(rates[i], in->protocol, in->c_proc_global);
-            t->load_cpu = cts_load_cpu(rates[i], in->protocol);
-            t->early_terminated = 0;
-        }
+
+        t->chosen_version = rates[i];
+        t->quality_bps = (float)VIDEO_BIT_RATE[rates[i]];
+        t->c_proc = cts_cproc(rates[i], in->protocol, in->c_proc_global);
+        t->load_cpu = cts_load_cpu(rates[i], in->protocol);
+
+        // CHUẨN BÀI BÁO: KHÔNG SỬ DỤNG CƠ CHẾ BỎ QUA TILE
+        t->early_terminated = 0;
+
         t->net_utility = max_qoe;
+
+        // Lưu lại quyết định cho segment tiếp theo
+        s_mosaic_prev_versions[i] = rates[i];
     }
-    
+
     free(rates);
     free(best_rates);
     free(r_tmp);
-    
     return RET_SUCCESS;
 }
-
 
 /* ── main dispatch ─────────────────────────────────────────────────────── */
 RET cts_schedule(CTS_ALGORITHM algo,
@@ -1662,6 +1668,8 @@ RET cts_schedule(CTS_ALGORITHM algo,
     case SCHEDULER_MOSAIC:
         ret = run_mosaic(in, out);
         break;
+    case SCHEDULER_SALIENTVR:
+        ret = run_salientvr(in, out);
     default:
         return RET_FAIL;
     }

@@ -229,4 +229,15 @@ RET request_handler_v2_reset(request_handler_v2_t *self);
 RET request_handler_v2_destroy(request_handler_v2_t *self);
 int tile_version_to_num(int version);
 
+/* Adaptive two-stage dispatch. Passing rm enables the PSI/SLR-μ gate. */
+RET request_handler_v2_post_get_info_two_stage(
+        request_handler_v2_t *self,
+        COUNT chunk_id,
+        int  *core_tiles,   int n_core,
+        int  *vp_tiles,     int num_vp_tiles,
+        int  *chosen_versions,
+        float actual_yaw,   float actual_pitch,
+        HTTP_VERSION protocol,
+        resource_monitor_t *rm);
+
 #endif /* REQUEST_HANDLER_V2_H */

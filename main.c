@@ -7,7 +7,7 @@
  *   SCHEDULER_SLR     — Stochastic Lagrangian Relaxation (adapts λ/μ/γ per seg)
  *
  * CTS Runtime Logic (Section V-D):
- *   1. resource_monitor_update()     → Δutime, Δstime, ρ_sys, C_proc
+ *   1. resource_monitor_update()     → Δutime, Δstime, ρ_sys, C_proc, PSI
  *   2. vpes_legr()                   → predicted (yaw, pitch)
  *   3. build_probability_map()       → p_i(t) for all tiles
  *   4. cts_schedule()                → per-tile quality r_i via chosen algo
@@ -41,7 +41,9 @@
 #define SERVER_ADDR              "https://192.168.101.17:8443"
 #define TOTAL_SEGMENTS           10
 #define VP_HISTORY_SZ            20
+#ifndef PROTOCOL
 #define PROTOCOL                 STREAM_HTTP_3_0
+#endif
 #define TAU_EARLY_TERM           0.10f
 #define RHO_SYS_WARN             0.80f
 #define VP_HALF_YAW              (VIEWPORT_WIDTH_DEGREES  / 2.0f)
@@ -225,8 +227,8 @@ int main(void)
 
     float p_map[NO_OF_ROWS * NO_OF_COLS];
     int   vp_tiles[NO_OF_ROWS * NO_OF_COLS];   /* tiles có p_i >= 0.15 (dùng cho SLR/scheduler) */
-    int   strict_vp_tiles[NO_OF_ROWS * NO_OF_COLS]; /* tiles lõi 90×90° — Two-Stage Stage 1 */
-    int   n_strict_vp = 0;
+    int   stage1_tiles[NO_OF_ROWS * NO_OF_COLS]; /* p_i >= 0.50 */
+    int   n_stage1 = 0;
     int   strict_vp_actual[NO_OF_ROWS * NO_OF_COLS]; /* 90×90° theo góc THỰC TẾ — dùng cho metrics */
     int   n_strict_vp_actual = 0;
 
@@ -268,8 +270,11 @@ int main(void)
         resource_monitor_update(&rm);
         float rho   = get_system_status(&rm);
         float cproc = resource_monitor_get_cproc(&rm);
-        printf("[RM] rho_sys=%.4f  C_proc=%.1f%s\n",
-               rho, cproc, (rho > RHO_SYS_WARN) ? "  [HIGH]" : "");
+        float psi   = resource_monitor_get_psi_cpu(&rm);
+        printf("[RM] rho_sys=%.4f  C_proc=%.1f  PSI.some.avg10=%s%.2f%%%s\n",
+               rho, cproc,
+               resource_monitor_has_psi(&rm) ? "" : "unavailable/",
+               psi, (rho > RHO_SYS_WARN) ? "  [HIGH]" : "");
 
         /* Step B: viewport prediction */
         float pred_yaw = 180.0f, pred_pit = 0.0f;
@@ -317,9 +322,11 @@ int main(void)
         int nvp = build_vp_list(p_map, tile_count, vp_tiles, 0.15f);
         printf("[PM] %d viewport tiles (p>=0.15)\n", nvp);
 
-        /* Two-Stage: trích xuất core tiles 90×90° từ góc DỰ ĐOÁN */
-        n_strict_vp = get_strict_vp_tiles(pred_yaw, pred_pit, strict_vp_tiles);
-        printf("[PM] %d strict-VP tiles (90x90, predicted)\n", n_strict_vp);
+        /* Stage 1 follows the paper's probability boundary exactly. */
+        n_stage1 = build_vp_list(p_map, tile_count, stage1_tiles,
+                                 HTTP_POOL_STAGE1_PROB_MIN);
+        printf("[PM] %d Stage-1 tiles (p>=%.2f)\n",
+               n_stage1, HTTP_POOL_STAGE1_PROB_MIN);
 
         /* Step D: bandwidth estimate (bits/s) */
         float bw = harmonic_bw(bw_hist, BW_HIST) *1.0f;
@@ -361,6 +368,11 @@ int main(void)
             printf("[SLR] λ=%.3f  μ=%.3f  γ=%.3f\n",
                    slr_state.lambda, slr_state.mu, slr_state.gamma);
 
+        /* Share the ABR layer's CPU multiplier with the PSI admission gate. */
+        http_pool_set_cpu_mu(rh.pool,
+                             (ACTIVE_ALGORITHM == SCHEDULER_SLR)
+                                 ? slr_state.mu : 0.0f);
+
         if (nvp > 0) last_q = sched_out.tiles[vp_tiles[0]].chosen_version;
         
         chosen_bitrate_all[seg] = last_q;
@@ -385,14 +397,13 @@ int main(void)
         double t_start = now_seconds();
 
         /* Two-Stage Dispatch:
-         *   Stage 1 = strict_vp_tiles  (90×90° dự đoán, HIGH PRIORITY, không ET)
-         *   Stage 2 = các tile còn lại có p_i > 0  (từ vp_tiles), áp dụng ET
-         * Truyền strict_vp_tiles làm "core" vào request handler. */
+         *   Stage 1 = p_i >= 0.50, dispatched immediately.
+         *   Stage 2 = p_i < 0.50, admitted only by the adaptive PSI gate. */
         if (request_handler_v2_post_get_info_two_stage(&rh, seg,
-                                             strict_vp_tiles, n_strict_vp,
+                                             stage1_tiles, n_stage1,
                                              vp_tiles, nvp,
                                              NULL, actual_yaw, actual_pitch,
-                                             PROTOCOL) != RET_SUCCESS)
+                                             PROTOCOL, &rm) != RET_SUCCESS)
             fprintf(stderr, "[main] download seg %llu failed\n", seg+1);
 
         double t_end = now_seconds();
